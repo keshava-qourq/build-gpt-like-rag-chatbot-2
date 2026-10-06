@@ -1026,7 +1026,11 @@ export default function Screen() {
               className="truncate text-[1.35rem] font-semibold tracking-tight"
               style={{ color: "#231F1A", fontFamily: brand.fontHeading }}
             >
-              {activeId ? (active ? (active.title ?? "Untitled conversation") : "Untitled conversation") : "New chat"}
+              {activeId
+                ? active
+                  ? (active.title ?? "Untitled conversation")
+                  : "Untitled conversation"
+                : "New chat"}
             </h1>
             <p className="mt-1 text-[13px]" style={{ color: "#6E675B" }}>
               {activeId

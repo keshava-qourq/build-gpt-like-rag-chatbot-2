@@ -155,7 +155,9 @@ describe("Chat screen", () => {
     await userEvent.type(textbox, "Hello there");
     await userEvent.click(screen.getByRole("button", { name: "Send" }));
 
-    await waitFor(() => expect(screen.getAllByText("Hello there").length).toBeGreaterThanOrEqual(1));
+    await waitFor(() =>
+      expect(screen.getAllByText("Hello there").length).toBeGreaterThanOrEqual(1),
+    );
     expect(mocked.createConversation).toHaveBeenCalledTimes(1);
     expect(mocked.streamAssistantMessage).toHaveBeenCalledWith(
       "conv-new",
@@ -235,7 +237,9 @@ describe("Chat screen", () => {
     mocked.listConversations.mockResolvedValue([
       { id: "conv-ghost", title: "Someone else's chat", updated_at: new Date().toISOString() },
     ]);
-    mocked.getConversation.mockRejectedValueOnce(new Error("GET /conversations/conv-ghost failed: 404"));
+    mocked.getConversation.mockRejectedValueOnce(
+      new Error("GET /conversations/conv-ghost failed: 404"),
+    );
 
     renderScreen();
 
