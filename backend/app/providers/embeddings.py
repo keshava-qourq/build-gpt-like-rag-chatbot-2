@@ -99,5 +99,59 @@ class OpenAIEmbeddingsProvider(EmbeddingsProvider):
         raise EmbeddingProviderError(f"embedding provider error: {last_exc}") from last_exc
 
 
+# Keyed by `EMBEDDINGS_PROVIDER` (default "openai"); `get_embeddings_provider()`
+# looks up the adapter class here rather than branching inline, so adding a
+# new provider is a registry entry, not a change to every call site -- and no
+# retrieval or ingestion module ever imports a vendor SDK directly.
+PROVIDER_REGISTRY: dict[str, type[EmbeddingsProvider]] = {
+    "openai": OpenAIEmbeddingsProvider,
+}
+
+
 def get_embeddings_provider() -> EmbeddingsProvider:
-    return OpenAIEmbeddingsProvider()
+    provider_name = os.getenv("EMBEDDINGS_PROVIDER", "openai").strip().lower()
+    try:
+        provider_cls = PROVIDER_REGISTRY[provider_name]
+    except KeyError as exc:
+        raise ValueError(
+            f"Unknown EMBEDDINGS_PROVIDER '{provider_name}'; known providers: "
+            f"{sorted(PROVIDER_REGISTRY)}"
+        ) from exc
+    return provider_cls()
+
+
+class EmbeddingsConfigurationError(RuntimeError):
+    """Raised at startup when the configured embeddings model/dimension does
+    not match what is recorded on chunks already embedded in the database --
+    serving search over a mix of incompatible vectors silently returns wrong
+    results, so this is raised instead of started around (AC-067)."""
+
+
+def verify_embeddings_configuration(db, provider: EmbeddingsProvider | None = None) -> None:
+    """Compare the configured embeddings model/dimension against whatever is
+    recorded on existing chunks (`Chunk.embedding_model`/`embedding_dim`).
+
+    No chunks embedded yet means nothing to compare against, so this is a
+    no-op on a fresh database. Call once at startup, before the app begins
+    serving searches.
+    """
+    from app.models import Chunk
+
+    provider = provider or get_embeddings_provider()
+    row = (
+        db.query(Chunk.embedding_model, Chunk.embedding_dim)
+        .filter(Chunk.embedding_model.isnot(None))
+        .distinct()
+        .first()
+    )
+    if row is None:
+        return
+    stored_model, stored_dim = row
+    if stored_model != provider.model_name or stored_dim != provider.dimension:
+        raise EmbeddingsConfigurationError(
+            f"Embeddings configuration mismatch: existing chunks were embedded "
+            f"with model '{stored_model}' (dim={stored_dim}), but the configured "
+            f"embeddings model is '{provider.model_name}' (dim={provider.dimension}). "
+            "A re-index of the document library is required before serving "
+            "searches over these vectors."
+        )

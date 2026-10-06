@@ -18,6 +18,7 @@ from app import models  # noqa: F401 -- imported so the tables register before c
 from app.auth import require_auth
 from app.database import Base, SessionLocal, engine
 from app.models import Organization
+from app.providers.embeddings import verify_embeddings_configuration
 from app.routers import auth, conversations, documents, invitations, users
 from app.schemas import HealthResponse
 from app.storage import S3_BUCKET, get_s3_client
@@ -99,6 +100,17 @@ def _provision_organization() -> None:
 
 
 _provision_organization()
+
+
+def _check_embeddings_configuration() -> None:
+    """Fail startup rather than serve search over mixed vectors (AC-067):
+    compares the configured embeddings model/dimension against whatever is
+    already recorded on chunks in the database."""
+    with SessionLocal() as session:
+        verify_embeddings_configuration(session)
+
+
+_check_embeddings_configuration()
 
 app.include_router(auth.router)
 app.include_router(invitations.router)
