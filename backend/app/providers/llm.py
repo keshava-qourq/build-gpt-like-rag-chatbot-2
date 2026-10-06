@@ -28,6 +28,15 @@ class LLMProvider(ABC):
     async def generate_title(self, *, first_message: str) -> str:
         """Generate a short conversation title from its first message."""
 
+    @abstractmethod
+    async def rewrite_query(self, *, history: list[dict[str, str]], question: str) -> str:
+        """Rewrite a possibly pronoun/shorthand-laden follow-up `question`
+        into a standalone query using `history` (the most recent turns
+        only -- the caller is responsible for bounding that window), so
+        retrieval searches for what the question actually refers to rather
+        than for the pronoun itself. Returns the question unchanged when it
+        is already standalone."""
+
 
 class OpenAILLMProvider(LLMProvider):
     """Default provider. Model name and API key come from config
@@ -74,6 +83,27 @@ class OpenAILLMProvider(LLMProvider):
                     ),
                 },
                 {"role": "user", "content": first_message},
+            ],
+        )
+        return response.choices[0].message.content.strip()
+
+    async def rewrite_query(self, *, history: list[dict[str, str]], question: str) -> str:
+        client = self._get_client()
+        response = await client.chat.completions.create(
+            model=self.model,
+            messages=[
+                {
+                    "role": "system",
+                    "content": (
+                        "Rewrite the user's final question as a standalone query that "
+                        "replaces any pronoun or shorthand reference with what it refers "
+                        "to, using the conversation history supplied. If the question is "
+                        "already standalone, return it unchanged. Respond with only the "
+                        "rewritten query -- no quotation marks, no explanation."
+                    ),
+                },
+                *history,
+                {"role": "user", "content": question},
             ],
         )
         return response.choices[0].message.content.strip()

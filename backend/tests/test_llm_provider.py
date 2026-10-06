@@ -26,6 +26,9 @@ def test_registry_lookup_selects_configured_provider(monkeypatch):
         async def generate_title(self, *, first_message):
             return "fake title"
 
+        async def rewrite_query(self, *, history, question):
+            return question
+
     monkeypatch.setitem(llm_module.PROVIDER_REGISTRY, "fake", _FakeLLMProvider)
     monkeypatch.setenv("LLM_PROVIDER", "fake")
 
@@ -136,3 +139,22 @@ def test_generate_title_returns_stripped_text_from_injected_client():
     call = client.chat.completions.calls[0]
     assert call["model"] == "gpt-4o"
     assert "stream" not in call
+
+
+def test_rewrite_query_returns_stripped_standalone_query_from_injected_client():
+    client = _FakeOpenAIClient(title_text="  When does the NDA expire?  ")
+    provider = OpenAILLMProvider(model="gpt-4o", client=client)
+    history = [
+        {"role": "user", "content": "Tell me about the NDA"},
+        {"role": "assistant", "content": "The NDA is a non-disclosure agreement."},
+    ]
+
+    rewritten = asyncio.run(provider.rewrite_query(history=history, question="when does it expire?"))
+
+    assert rewritten == "When does the NDA expire?"
+    call = client.chat.completions.calls[0]
+    assert call["model"] == "gpt-4o"
+    assert "stream" not in call
+    assert call["messages"][0]["role"] == "system"
+    assert call["messages"][1:3] == history
+    assert call["messages"][-1] == {"role": "user", "content": "when does it expire?"}

@@ -16,14 +16,21 @@ persisted assistant `Message` plus its `Citation` rows once exhausted.
 
 from __future__ import annotations
 
+import os
 import uuid
 from collections.abc import AsyncIterator
 from dataclasses import dataclass
 
 from sqlalchemy.orm import Session
 
-from app.providers.llm import get_llm_provider
+from app.providers.llm import LLMProvider, get_llm_provider
 from app.retrieval import ScoredChunk, search
+
+# How many of the most recent conversation turns are handed to query
+# rewriting (AC-075) -- never the full history, however long the
+# conversation has grown. Small by default: a follow-up almost always
+# refers back to only the last turn or two.
+FOLLOWUP_CONTEXT_TURNS = int(os.getenv("FOLLOWUP_CONTEXT_TURNS", "6"))
 
 # Returned verbatim (AC-057) whenever no chunk in the org's ready library
 # clears `retrieval.RELEVANCE_THRESHOLD` for the question asked. A single
@@ -110,22 +117,49 @@ def _resolve_citations(results: list[ScoredChunk]) -> list[ResolvedCitation]:
     ]
 
 
+async def _standalone_query(
+    provider: LLMProvider, conversation_history: list[dict[str, str]], question: str
+) -> str:
+    """Rewrite a follow-up `question` into a standalone query for retrieval
+    (AC-074), using at most the last `FOLLOWUP_CONTEXT_TURNS` turns of
+    `conversation_history` -- never the full history (AC-075).
+
+    A first message in a conversation has no prior turns, so it is never
+    sent through rewriting and retrieval runs on exactly what was asked
+    (AC-076). A rewrite-provider failure falls back to the original
+    question rather than breaking the turn.
+    """
+    if not conversation_history:
+        return question
+    recent_history = conversation_history[-FOLLOWUP_CONTEXT_TURNS:]
+    try:
+        rewritten = await provider.rewrite_query(history=recent_history, question=question)
+    except Exception:  # noqa: BLE001 -- a rewrite failure must never break the turn
+        return question
+    rewritten = (rewritten or "").strip()
+    return rewritten or question
+
+
 async def answer_question(
     db: Session,
     org_id: uuid.UUID,
     conversation_history: list[dict[str, str]],
     question: str,
 ) -> AsyncIterator[AnswerToken | AnswerCitations]:
-    """Retrieve, then either refuse or stream a grounded, cited answer.
+    """Rewrite, retrieve, then either refuse or stream a grounded, cited
+    answer.
 
+    `question` is first rewritten into a standalone query for retrieval
+    when there is prior conversation history (AC-074, AC-075, AC-076).
     Retrieval always goes through `retrieval.search`, so only chunks from
     ready documents in the org's library are ever considered (AC-059). When
     nothing clears `RELEVANCE_THRESHOLD`, this yields the fixed refusal and
     an empty citation list and returns *without ever calling the LLM
-    provider* (AC-057, AC-058) -- `get_llm_provider()` is not even invoked
-    on that path.
+    provider to generate an answer* (AC-057, AC-058, AC-077).
     """
-    results = await search(db, org_id, question)
+    provider = get_llm_provider()
+    search_query = await _standalone_query(provider, conversation_history, question)
+    results = await search(db, org_id, search_query)
 
     if not results:
         yield AnswerToken(REFUSAL_ANSWER)
@@ -133,7 +167,6 @@ async def answer_question(
         return
 
     context = _build_context(results)
-    provider = get_llm_provider()
     messages = [*conversation_history, {"role": "user", "content": question}]
 
     stream = provider.stream_answer(system=_SYSTEM_PROMPT, messages=messages, context=context)
@@ -145,6 +178,7 @@ async def answer_question(
 
 __all__ = [
     "REFUSAL_ANSWER",
+    "FOLLOWUP_CONTEXT_TURNS",
     "AnswerToken",
     "AnswerCitations",
     "ResolvedCitation",

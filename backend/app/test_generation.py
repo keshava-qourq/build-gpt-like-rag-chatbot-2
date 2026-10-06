@@ -319,3 +319,174 @@ def test_context_block_contains_no_general_knowledge_fallback(db, org, user, mon
 def test_system_prompt_instructs_partial_coverage_handling():
     assert "partially covers" in generation._SYSTEM_PROMPT
     assert "not covered by the uploaded documents" in generation._SYSTEM_PROMPT
+
+
+# ---------------------------------------------------------------------------
+# AC-074..AC-077, rewrite failure fallback: follow-up query rewriting.
+# ---------------------------------------------------------------------------
+
+
+class _KeyedFakeEmbeddingsProvider:
+    """Maps known text to a fixed vector so a test can tell the rewritten
+    query's embedding apart from the original pronoun question's."""
+
+    model_name = "fake-model"
+
+    def __init__(self, mapping, default):
+        self._mapping = mapping
+        self._default = default
+
+    @property
+    def dimension(self):
+        return len(self._default)
+
+    async def embed(self, texts):
+        return [self._mapping.get(text, self._default) for text in texts]
+
+
+class _FakeRewritingLLMProvider:
+    """Records every `rewrite_query` and `stream_answer` call; used to
+    assert both what was rewritten and that the answer-generation call
+    never happens on a refusal path."""
+
+    def __init__(self, rewritten=None, rewrite_error=None, tokens=None, forbid_stream=False):
+        self._rewritten = rewritten
+        self._rewrite_error = rewrite_error
+        self._tokens = tokens or ["ok"]
+        self._forbid_stream = forbid_stream
+        self.rewrite_calls: list[dict] = []
+        self.stream_calls: list[dict] = []
+
+    async def rewrite_query(self, *, history, question):
+        self.rewrite_calls.append({"history": history, "question": question})
+        if self._rewrite_error is not None:
+            raise self._rewrite_error
+        return self._rewritten if self._rewritten is not None else question
+
+    def stream_answer(self, *, system, messages, context):
+        if self._forbid_stream:
+            raise AssertionError("stream_answer must never be called on the refusal path")
+        self.stream_calls.append({"system": system, "messages": messages, "context": context})
+
+        async def _gen():
+            for token in self._tokens:
+                yield token
+
+        return _gen()
+
+    async def generate_title(self, *, first_message):
+        return "title"
+
+
+ORIGINAL_QUESTION_VECTOR = [0.0, 0.0, 1.0]
+REWRITTEN_QUERY_VECTOR = [1.0, 0.0, 0.0]
+
+
+def test_followup_question_is_rewritten_and_retrieval_matches_the_referenced_policy(
+    db, org, user, monkeypatch
+):
+    document = _make_document(db, org, user)
+    _add_chunk(
+        db,
+        org,
+        document,
+        ordinal=0,
+        text="The NDA expires after 2 years.",
+        embedding=REWRITTEN_QUERY_VECTOR,
+    )
+
+    history = [
+        {"role": "user", "content": "Tell me about the NDA"},
+        {"role": "assistant", "content": "The NDA is a non-disclosure agreement."},
+    ]
+    question = "when does it expire?"
+    rewritten_query = "When does the NDA expire?"
+
+    import app.retrieval as retrieval_module
+
+    monkeypatch.setattr(
+        retrieval_module,
+        "get_embeddings_provider",
+        lambda: _KeyedFakeEmbeddingsProvider(
+            {rewritten_query: REWRITTEN_QUERY_VECTOR, question: ORIGINAL_QUESTION_VECTOR},
+            default=ORIGINAL_QUESTION_VECTOR,
+        ),
+    )
+    fake_provider = _FakeRewritingLLMProvider(rewritten=rewritten_query)
+    monkeypatch.setattr(generation, "get_llm_provider", lambda: fake_provider)
+
+    events = _collect(db, org.id, question, conversation_history=history)
+
+    assert fake_provider.rewrite_calls == [{"history": history, "question": question}]
+    citations_event = events[-1]
+    assert isinstance(citations_event, AnswerCitations)
+    assert len(citations_event.citations) == 1
+    assert citations_event.citations[0].document_id == document.id
+
+
+def test_only_configured_recent_turns_are_passed_to_rewriting(db, org, monkeypatch):
+    long_history = [
+        {"role": "user" if i % 2 == 0 else "assistant", "content": f"turn {i}"}
+        for i in range(50)
+    ]
+    fake_provider = _FakeRewritingLLMProvider()
+    monkeypatch.setattr(generation, "get_llm_provider", lambda: fake_provider)
+
+    _collect(db, org.id, "a follow-up question", conversation_history=long_history)
+
+    assert len(fake_provider.rewrite_calls) == 1
+    seen_history = fake_provider.rewrite_calls[0]["history"]
+    assert len(seen_history) == generation.FOLLOWUP_CONTEXT_TURNS
+    assert seen_history == long_history[-generation.FOLLOWUP_CONTEXT_TURNS :]
+
+
+def test_first_message_with_no_history_is_never_rewritten(db, org, user, monkeypatch):
+    document = _make_document(db, org, user)
+    _add_chunk(
+        db, org, document, ordinal=0, text="Paris is the capital of France.", embedding=QUERY_VECTOR
+    )
+
+    class _ForbidRewriteProvider(_FakeRewritingLLMProvider):
+        async def rewrite_query(self, *, history, question):
+            raise AssertionError("rewrite must never be called with no prior history")
+
+    fake_provider = _ForbidRewriteProvider()
+    monkeypatch.setattr(generation, "get_llm_provider", lambda: fake_provider)
+
+    events = _collect(db, org.id, "what is the capital of France?", conversation_history=[])
+
+    citations_event = events[-1]
+    assert isinstance(citations_event, AnswerCitations)
+    assert len(citations_event.citations) == 1
+
+
+def test_refusal_on_rewritten_query_never_calls_provider_for_the_answer(db, org, monkeypatch):
+    history = [{"role": "user", "content": "earlier turn"}]
+    fake_provider = _FakeRewritingLLMProvider(
+        rewritten="a standalone query matching nothing", forbid_stream=True
+    )
+    monkeypatch.setattr(generation, "get_llm_provider", lambda: fake_provider)
+
+    events = _collect(db, org.id, "what about it?", conversation_history=history)
+
+    assert events == [AnswerToken(REFUSAL_ANSWER), AnswerCitations([])]
+    assert fake_provider.stream_calls == []
+
+
+def test_rewrite_provider_failure_falls_back_to_original_question(db, org, user, monkeypatch):
+    document = _make_document(db, org, user)
+    _add_chunk(
+        db, org, document, ordinal=0, text="Paris is the capital of France.", embedding=QUERY_VECTOR
+    )
+    history = [{"role": "user", "content": "earlier turn"}]
+    fake_provider = _FakeRewritingLLMProvider(rewrite_error=RuntimeError("provider down"))
+    monkeypatch.setattr(generation, "get_llm_provider", lambda: fake_provider)
+
+    events = _collect(
+        db, org.id, "what is the capital of France?", conversation_history=history
+    )
+
+    citations_event = events[-1]
+    assert isinstance(citations_event, AnswerCitations)
+    assert len(citations_event.citations) == 1
+    assert fake_provider.stream_calls, "the turn must still complete via stream_answer"
