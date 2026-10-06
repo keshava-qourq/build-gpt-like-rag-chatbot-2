@@ -145,9 +145,7 @@ def _collect(db, org_id, question, *, embeddings_provider=None, conversation_his
         # defaults to the real embeddings provider unless one is monkeypatched
         # at module import; patch `app.retrieval.get_embeddings_provider` so
         # no network call is ever attempted.
-        async for event in answer_question(
-            db, org_id, conversation_history or [], question
-        ):
+        async for event in answer_question(db, org_id, conversation_history or [], question):
             events.append(event)
         return events
 
@@ -202,7 +200,10 @@ def test_library_with_only_non_ready_documents_refuses(db, org, user, monkeypatc
     monkeypatch.setattr(generation, "get_llm_provider", lambda: _RaisingLLMProvider())
     document = _make_document(db, org, user, status=status)
     _add_chunk(
-        db, org, document, ordinal=0,
+        db,
+        org,
+        document,
+        ordinal=0,
         text="Paris is the capital of France.",
         embedding=[1.0, 0.0, 0.0],
     )
@@ -241,12 +242,24 @@ def test_refusal_can_be_followed_by_a_second_question_in_same_conversation(db, o
 def test_grounded_answer_streams_tokens_and_resolves_citations(db, org, user, monkeypatch):
     document = _make_document(db, org, user)
     chunk_1 = _add_chunk(
-        db, org, document, ordinal=0, text="The refund window is 30 days.",
-        embedding=[1.0, 0.0, 0.0], page_start=2, page_end=2,
+        db,
+        org,
+        document,
+        ordinal=0,
+        text="The refund window is 30 days.",
+        embedding=[1.0, 0.0, 0.0],
+        page_start=2,
+        page_end=2,
     )
     chunk_2 = _add_chunk(
-        db, org, document, ordinal=1, text="Refunds require a receipt.",
-        embedding=[0.99, 0.01, 0.0], page_start=3, page_end=3,
+        db,
+        org,
+        document,
+        ordinal=1,
+        text="Refunds require a receipt.",
+        embedding=[0.99, 0.01, 0.0],
+        page_start=3,
+        page_end=3,
     )
 
     fake_provider = _FakeStreamingLLMProvider(["The refund window is 30 days", " [1]."])
@@ -286,7 +299,11 @@ def test_context_block_contains_no_general_knowledge_fallback(db, org, user, mon
     itself the retrieved chunk text (AC-063)."""
     document = _make_document(db, org, user)
     _add_chunk(
-        db, org, document, ordinal=0, text="Our company was founded in 2019.",
+        db,
+        org,
+        document,
+        ordinal=0,
+        text="Our company was founded in 2019.",
         embedding=[1.0, 0.0, 0.0],
     )
     fake_provider = _FakeStreamingLLMProvider(["Founded in 2019 [1]."])
