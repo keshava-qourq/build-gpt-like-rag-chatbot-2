@@ -10,7 +10,7 @@ import json
 import uuid
 from datetime import datetime
 
-from sqlalchemy import DateTime, ForeignKey, Integer, String, Text, Uuid, event
+from sqlalchemy import DateTime, ForeignKey, Index, Integer, String, Text, Uuid, event
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 from sqlalchemy.types import TypeDecorator
 
@@ -139,6 +139,21 @@ class Chunk(Base):
     embedding_dim: Mapped[int | None] = mapped_column(Integer, nullable=True)
 
     document: Mapped[Document] = relationship(back_populates="chunks")
+
+
+if engine.dialect.name == "postgresql":
+    # Approximate nearest-neighbour index over the real pgvector column
+    # (AC-043). `Vector` (above) only compiles to `pgvector.sqlalchemy.Vector`
+    # under the postgresql dialect, so an ivfflat index only makes sense --
+    # and is only created -- here; the SQLite JSON-text fallback gets no
+    # index and needs none, since it is never queried by vector distance.
+    Index(
+        "ix_chunks_embedding_ivfflat",
+        Chunk.embedding,
+        postgresql_using="ivfflat",
+        postgresql_ops={"embedding": "vector_cosine_ops"},
+        postgresql_with={"lists": 100},
+    )
 
 
 class Conversation(Base):

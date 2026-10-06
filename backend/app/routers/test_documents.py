@@ -415,6 +415,51 @@ def test_deleted_document_never_listed_or_downloadable_cross_org(
     assert all(item["id"] != str(doc_id) for item in listing.json()["items"])
 
 
+def test_failed_document_still_downloadable(
+    auth_header: dict[str, str], fake_s3: _FakeS3, fake_celery: _FakeCelery, db_session: Session
+) -> None:
+    """AC-052: a corrupt/password-protected/no-text document is marked
+    failed by the worker, but the original object is never deleted and
+    GET /documents/{id}/download must still serve it."""
+    doc_id = _upload_one(auth_header)
+
+    from app.models import Document
+
+    document = db_session.query(Document).filter(Document.id == doc_id).one()
+    document.status = "failed"
+    document.failure_reason = (
+        "This file is password-protected and could not be processed. Remove the "
+        "password and upload it again."
+    )
+    db_session.commit()
+
+    response = client.get(f"/documents/{doc_id}/download", headers=auth_header)
+    assert response.status_code == 200
+    assert fake_s3.delete_calls == []
+
+
+def test_failed_document_still_deletable(
+    auth_header: dict[str, str], fake_s3: _FakeS3, fake_celery: _FakeCelery, db_session: Session
+) -> None:
+    """AC-052: a failed document can still be deleted like any other."""
+    doc_id = _upload_one(auth_header)
+
+    from app.models import Document
+
+    document = db_session.query(Document).filter(Document.id == doc_id).one()
+    document.status = "failed"
+    document.failure_reason = "This file appears to be corrupted or unreadable and could not be processed."
+    db_session.commit()
+
+    response = client.delete(f"/documents/{doc_id}", headers=auth_header)
+    assert response.status_code == 200
+
+    from app.models import Document as DocumentModel
+
+    assert db_session.query(DocumentModel).filter(DocumentModel.id == doc_id).one_or_none() is None
+    assert len(fake_s3.delete_calls) == 1
+
+
 def test_citations_survive_deletion_with_nulled_references(
     auth_header: dict[str, str], fake_s3: _FakeS3, fake_celery: _FakeCelery, db_session: Session
 ) -> None:

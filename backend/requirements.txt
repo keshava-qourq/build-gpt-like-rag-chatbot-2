@@ -33,6 +33,10 @@ python-docx==1.1.2
 # llm / embeddings: default provider behind the adapters in app/providers/.
 openai==1.51.2
 
+# worker: real token counts for chunk sizing (AC-039), matched to whichever
+# model EMBEDDINGS_MODEL names rather than a fixed character splitter.
+tiktoken==0.8.0
+
 # Checks. The platform installs and runs this file before it reports that the
 # generated tests pass, so the test dependencies belong here rather than in a
 # second file nobody installs. httpx is what fastapi.testclient runs on.

@@ -41,6 +41,25 @@ class ExtractionError(Exception):
     `ingest_document`, never left to propagate to the broker."""
 
 
+# User-facing prose stored verbatim on `Document.failure_reason` and surfaced
+# unchanged by GET /documents (AC-050, AC-052) -- never a raw exception
+# message. Exactly three categories, regardless of which format produced
+# them: no text could be extracted (including a scanned/image-only PDF),
+# the file is corrupt or otherwise unreadable, or the file is
+# password-protected.
+NO_TEXT_EXTRACTED_REASON = (
+    "No text could be extracted from this document. Scanned or image-only "
+    "documents are not supported in this release."
+)
+CORRUPT_FILE_REASON = (
+    "This file is corrupted or otherwise an unreadable file and could not be processed."
+)
+PASSWORD_PROTECTED_REASON = (
+    "This file is password-protected and could not be processed. Remove the "
+    "password and upload it again."
+)
+
+
 @dataclass
 class Passage:
     """One unit of extracted text plus its optional provenance.
@@ -64,7 +83,7 @@ def _decode(data: bytes) -> str:
         try:
             return data.decode("latin-1")
         except Exception as exc:
-            raise ExtractionError("unreadable file") from exc
+            raise ExtractionError(CORRUPT_FILE_REASON) from exc
 
 
 def _extract_txt_passages(data: bytes) -> list[Passage]:
@@ -78,7 +97,7 @@ def _extract_txt_passages(data: bytes) -> list[Passage]:
     # guaranteed (AC-038).
     text = _decode(data)
     if not text.strip():
-        raise ExtractionError("no extractable text")
+        raise ExtractionError(NO_TEXT_EXTRACTED_REASON)
     return [Passage(text=text)]
 
 
@@ -91,7 +110,7 @@ def _extract_csv_passages(data: bytes) -> list[Passage]:
         if any(cell.strip() for cell in row)
     ]
     if not passages:
-        raise ExtractionError("no extractable text")
+        raise ExtractionError(NO_TEXT_EXTRACTED_REASON)
     return passages
 
 
@@ -103,12 +122,12 @@ def _extract_pdf_passages(data: bytes) -> list[Passage]:
     except Exception as exc:
         message = str(exc).lower()
         if "password" in message or "encrypt" in message:
-            raise ExtractionError("password-protected file") from exc
-        raise ExtractionError("unreadable file") from exc
+            raise ExtractionError(PASSWORD_PROTECTED_REASON) from exc
+        raise ExtractionError(CORRUPT_FILE_REASON) from exc
 
     try:
         if doc.needs_pass:
-            raise ExtractionError("password-protected file")
+            raise ExtractionError(PASSWORD_PROTECTED_REASON)
         try:
             passages: list[Passage] = []
             for page_number, page in enumerate(doc, start=1):
@@ -118,12 +137,12 @@ def _extract_pdf_passages(data: bytes) -> list[Passage]:
         except ExtractionError:
             raise
         except Exception as exc:
-            raise ExtractionError("unreadable file") from exc
+            raise ExtractionError(CORRUPT_FILE_REASON) from exc
     finally:
         doc.close()
 
     if not passages:
-        raise ExtractionError("no extractable text")
+        raise ExtractionError(NO_TEXT_EXTRACTED_REASON)
     return passages
 
 
@@ -136,7 +155,7 @@ def _extract_docx_passages(data: bytes) -> list[Passage]:
     try:
         document = docx.Document(io.BytesIO(data))
     except Exception as exc:
-        raise ExtractionError("unreadable file") from exc
+        raise ExtractionError(CORRUPT_FILE_REASON) from exc
 
     # Walk the body's XML children in document order rather than
     # `document.paragraphs`/`document.tables` separately: that keeps
@@ -157,7 +176,7 @@ def _extract_docx_passages(data: bytes) -> list[Passage]:
 
     text = "\n".join(parts)
     if not text.strip():
-        raise ExtractionError("no extractable text")
+        raise ExtractionError(NO_TEXT_EXTRACTED_REASON)
     return [Passage(text=text)]
 
 
@@ -178,7 +197,7 @@ def extract_passages(fmt: str, data: bytes) -> list[Passage]:
     never spans two pages or a non-contiguous row range."""
     extractor = _PASSAGE_EXTRACTORS.get((fmt or "").lower())
     if extractor is None:
-        raise ExtractionError("unreadable file")
+        raise ExtractionError(CORRUPT_FILE_REASON)
     return extractor(data)
 
 
@@ -243,7 +262,7 @@ def _fetch_object(s3_key: str) -> bytes:
         obj = client.get_object(Bucket=S3_BUCKET, Key=s3_key)
         return obj["Body"].read()
     except Exception as exc:
-        raise ExtractionError("unreadable file") from exc
+        raise ExtractionError(CORRUPT_FILE_REASON) from exc
 
 
 def _run_embed(provider: EmbeddingsProvider, pieces: list[str]) -> list[list[float] | None]:
@@ -256,8 +275,25 @@ def _run_embed(provider: EmbeddingsProvider, pieces: list[str]) -> list[list[flo
 
 
 def _mark_failed(db: Session, document: Document, reason: str) -> None:
+    """Marks the document failed with a user-facing reason and leaves zero
+    `Chunk` rows behind (AC-051) -- including when a previously 'ready'
+    document is re-ingested and the re-ingest itself fails: any chunks from
+    the prior successful run are deleted here too, not just on a fresh
+    document, so nothing failed ever remains retrievable or citable.
+    Citations into those chunks survive with their chunk reference nulled,
+    the same pattern DELETE /documents/{id} uses."""
     db.rollback()
     document = db.query(Document).filter(Document.id == document.id).one()
+
+    chunk_ids = [
+        row.id for row in db.query(Chunk.id).filter(Chunk.document_id == document.id).all()
+    ]
+    if chunk_ids:
+        db.query(Citation).filter(Citation.chunk_id.in_(chunk_ids)).update(
+            {Citation.chunk_id: None}, synchronize_session=False
+        )
+    db.query(Chunk).filter(Chunk.document_id == document.id).delete()
+
     document.status = "failed"
     document.failure_reason = reason
     db.commit()
@@ -383,6 +419,6 @@ def ingest_document(self, document_id: str) -> None:
         except Exception:
             # Anything unanticipated is still a per-document failure, not a
             # worker crash: this is the last line of defense for AC-017.
-            _mark_failed(db, document, "unreadable file")
+            _mark_failed(db, document, CORRUPT_FILE_REASON)
     finally:
         db.close()
