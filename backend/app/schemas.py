@@ -62,6 +62,14 @@ class DocumentUploadResult(BaseModel):
     filename: str
     status: str
     error: str | None = None
+    # Populated only for status 'duplicate' (AC-031): the document already
+    # on file under this filename, and a message telling the caller that
+    # replacement must be confirmed via `replace_document_ids`.
+    existing_document_id: uuid.UUID | None = None
+    message: str | None = None
+    # Populated only on a successful replacement upload (AC-032): the
+    # document id this new version supersedes.
+    replaces_document_id: uuid.UUID | None = None
 
 
 class DocumentListItem(BaseModel):
@@ -72,6 +80,12 @@ class DocumentListItem(BaseModel):
     uploader: str
     status: str
     failure_reason: str | None = None
+    # The document this one replaces, if it was uploaded as a replacement,
+    # and whether that prior version is still in the database -- true until
+    # the worker retires it on successful ingestion, and left true forever
+    # if ingestion instead failed (AC-033).
+    supersedes_document_id: uuid.UUID | None = None
+    previous_version_retained: bool = False
     created_at: datetime
 
 

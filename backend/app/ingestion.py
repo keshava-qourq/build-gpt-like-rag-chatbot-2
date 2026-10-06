@@ -14,11 +14,13 @@ import csv
 import io
 import uuid
 from dataclasses import dataclass
+from datetime import UTC, datetime
 
 from sqlalchemy.orm import Session
 
 from app.database import SessionLocal
-from app.models import Chunk, Document
+from app.deletions import DeletedDocument
+from app.models import Chunk, Citation, Document
 from app.providers.embeddings import EmbeddingsProvider, get_embeddings_provider
 from app.queue import celery_app
 from app.storage import S3_BUCKET, get_s3_client
@@ -261,6 +263,47 @@ def _mark_failed(db: Session, document: Document, reason: str) -> None:
     db.commit()
 
 
+def _supersede_previous_version(db: Session, document: Document) -> None:
+    """Once a replacement reaches 'ready', the version it names is retired
+    for real -- not at upload time, and not if extraction had instead
+    failed (AC-032, AC-033). Mirrors DELETE /documents/{id} so a citation
+    into the retired version still resolves via the tombstone rather than
+    a bare 404, and reuses the same `DeletedDocument` tombstone table
+    rather than new infrastructure."""
+    if document.supersedes_document_id is None:
+        return
+
+    previous = (
+        db.query(Document).filter(Document.id == document.supersedes_document_id).one_or_none()
+    )
+    if previous is None:
+        return  # already retired, or named a document that no longer exists
+
+    try:
+        get_s3_client().delete_object(Bucket=S3_BUCKET, Key=previous.s3_key)
+    except Exception:
+        # The replacement is already 'ready'; a cleanup failure on the old
+        # object must not undo that or be reported as the replacement's own
+        # failure.
+        pass
+
+    chunk_ids = [
+        row.id for row in db.query(Chunk.id).filter(Chunk.document_id == previous.id).all()
+    ]
+    if chunk_ids:
+        db.query(Citation).filter(Citation.chunk_id.in_(chunk_ids)).update(
+            {Citation.chunk_id: None, Citation.document_id: None}, synchronize_session=False
+        )
+    db.query(Citation).filter(Citation.document_id == previous.id).update(
+        {Citation.document_id: None}, synchronize_session=False
+    )
+    db.query(Chunk).filter(Chunk.document_id == previous.id).delete()
+
+    db.add(DeletedDocument(id=previous.id, org_id=previous.org_id, deleted_at=datetime.now(UTC)))
+    db.delete(previous)
+    db.commit()
+
+
 @celery_app.task(
     bind=True,
     name="app.ingestion.ingest_document",
@@ -294,9 +337,7 @@ def ingest_document(self, document_id: str) -> None:
 
         if document.status == "processing":
             if self.request.retries >= MAX_INGEST_RETRIES:
-                _mark_failed(
-                    db, document, "worker crashed mid-document: max retries exceeded"
-                )
+                _mark_failed(db, document, "worker crashed mid-document: max retries exceeded")
                 return
             raise self.retry(countdown=INGEST_RETRY_DELAY_SECONDS, max_retries=MAX_INGEST_RETRIES)
 
@@ -316,9 +357,7 @@ def ingest_document(self, document_id: str) -> None:
 
             db.query(Chunk).filter(Chunk.document_id == document.id).delete()
 
-            for ordinal, (record, vector) in enumerate(
-                zip(chunk_records, embeddings, strict=True)
-            ):
+            for ordinal, (record, vector) in enumerate(zip(chunk_records, embeddings, strict=True)):
                 db.add(
                     Chunk(
                         org_id=document.org_id,
@@ -338,6 +377,7 @@ def ingest_document(self, document_id: str) -> None:
             document.status = "ready"
             document.failure_reason = None
             db.commit()
+            _supersede_previous_version(db, document)
         except ExtractionError as exc:
             _mark_failed(db, document, str(exc))
         except Exception:

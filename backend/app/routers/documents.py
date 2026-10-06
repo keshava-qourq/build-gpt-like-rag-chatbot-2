@@ -7,7 +7,8 @@ import uuid
 from datetime import UTC, datetime
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
+from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
+from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from app.auth import RequireAuth
@@ -42,6 +43,9 @@ ALLOWED_FORMATS = {
 
 _UNSUPPORTED_TYPE_MESSAGE = "Only PDF, DOCX, TXT, CSV and Markdown files are supported"
 _OVER_SIZE_MESSAGE = "File exceeds the 50MB per-file limit"
+_DUPLICATE_MESSAGE = (
+    "A version of this file already exists; confirm replacement to upload a new version."
+)
 
 # Name of the Celery task the ingestion worker registers; the worker module
 # itself belongs to another task, this is only the shared contract both
@@ -61,14 +65,24 @@ async def upload_documents(
     claims: RequireAuth,
     db: Annotated[Session, Depends(get_db)],
     files: Annotated[list[UploadFile], File(...)],
+    replace_document_ids: Annotated[list[uuid.UUID] | None, Form()] = None,
 ) -> list[DocumentUploadResult]:
     """Each file is validated, stored and recorded independently: a rejection
     or storage failure on one file returns its own error entry and never
     aborts the others (AC-017). Type is checked before a single byte is read;
     size is checked before anything reaches S3 or the database (AC-018,
-    AC-019)."""
+    AC-019).
+
+    A filename that already exists in the org (case-insensitive) is a
+    duplicate unless its document id is named in `replace_document_ids`:
+    replacement is opt-in, confirmed per document, never inferred (AC-031).
+    A confirmed replacement stores the new file and queues it with
+    `supersedes_document_id` set; the prior version is retired by the
+    worker only once the replacement reaches 'ready' (AC-032), never here.
+    """
     org_id = uuid.UUID(claims["org_id"])
     uploader_id = uuid.UUID(claims["sub"])
+    confirmed_replace_ids = set(replace_document_ids or [])
 
     results: list[DocumentUploadResult] = []
 
@@ -100,6 +114,27 @@ async def upload_documents(
             )
             continue
 
+        existing = (
+            db.query(Document)
+            .filter(Document.org_id == org_id, func.lower(Document.filename) == filename.lower())
+            .order_by(Document.created_at.desc())
+            .first()
+        )
+
+        if existing is not None and existing.id not in confirmed_replace_ids:
+            results.append(
+                DocumentUploadResult(
+                    id=existing.id,
+                    filename=filename,
+                    status="duplicate",
+                    existing_document_id=existing.id,
+                    message=_DUPLICATE_MESSAGE,
+                )
+            )
+            continue
+
+        supersedes_id = existing.id if existing is not None else None
+
         document_id = uuid.uuid4()
         s3_key = f"{org_id}/{document_id}/{filename}"
 
@@ -125,6 +160,7 @@ async def upload_documents(
             size_bytes=len(content),
             s3_key=s3_key,
             status="queued",
+            supersedes_document_id=supersedes_id,
             created_at=datetime.now(UTC),
         )
         db.add(document)
@@ -133,7 +169,14 @@ async def upload_documents(
 
         celery_app.send_task(INGEST_TASK_NAME, args=[str(document.id)])
 
-        results.append(DocumentUploadResult(id=document.id, filename=filename, status="queued"))
+        results.append(
+            DocumentUploadResult(
+                id=document.id,
+                filename=filename,
+                status="queued",
+                replaces_document_id=supersedes_id,
+            )
+        )
 
     return results
 
@@ -163,6 +206,13 @@ async def list_documents(
         .all()
     )
 
+    supersedes_ids = {doc.supersedes_document_id for doc, _ in rows if doc.supersedes_document_id}
+    still_present_ids: set[uuid.UUID] = set()
+    if supersedes_ids:
+        still_present_ids = {
+            row.id for row in db.query(Document.id).filter(Document.id.in_(supersedes_ids)).all()
+        }
+
     items = [
         DocumentListItem(
             id=doc.id,
@@ -172,6 +222,10 @@ async def list_documents(
             uploader=email,
             status=doc.status,
             failure_reason=doc.failure_reason,
+            supersedes_document_id=doc.supersedes_document_id,
+            previous_version_retained=doc.supersedes_document_id in still_present_ids
+            if doc.supersedes_document_id is not None
+            else False,
             created_at=doc.created_at,
         )
         for doc, email in rows

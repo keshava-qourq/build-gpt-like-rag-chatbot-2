@@ -1,23 +1,20 @@
-/* eslint-disable @typescript-eslint/ban-ts-comment */
-// @ts-nocheck
-/* eslint-disable @typescript-eslint/no-unused-vars */
 import React from "react";
 
 import * as UI from "@/lib/ui";
 import { Icons } from "@/lib/icons";
 import { brand } from "@/lib/brand";
 import { useNavigate } from "@/lib/navigate";
+import { listDocuments, uploadDocuments, type DocumentItem } from "@/lib/api";
 
 const { Button, Input, Label, Table, THead, TBody, TR, TH, TD } = UI;
-const { Plus, Search, X, ChevronRight, ChevronLeft, FileText, Package, Clock, Trash, Download, Upload, AlertCircle, CheckCircle } = Icons;
 
-const CURRENT_USER = { id: "u-1", name: "Nadia Rahman", role: "member" };
+const CURRENT_USER = { id: "u-1", name: "Nadia Rahman", role: "member" as "member" | "admin" };
 
 const MAX_BYTES = 50 * 1024 * 1024;
 
 const ACCEPTED_FORMATS = ["pdf", "docx", "txt", "csv", "md"];
 
-const FORMAT_LABELS = {
+const FORMAT_LABELS: Record<string, string> = {
   pdf: "PDF",
   docx: "DOCX",
   txt: "TXT",
@@ -25,7 +22,9 @@ const FORMAT_LABELS = {
   md: "Markdown",
 };
 
-const STATUS_META = {
+type StatusKey = "queued" | "processing" | "ready" | "failed";
+
+const STATUS_META: Record<StatusKey, { label: string; fg: string; bg: string; icon: string; hint: string }> = {
   queued: {
     label: "Queued",
     fg: "#5A544A",
@@ -56,273 +55,78 @@ const STATUS_META = {
   },
 };
 
-const SEED_DOCUMENTS = [
-  {
-    id: "doc-114",
-    filename: "Q3-field-operations-review.pdf",
-    format: "pdf",
-    size_bytes: 8808038,
-    uploader_id: "u-1",
-    uploader: "Nadia Rahman",
-    created_at: "2026-10-06T09:14:00",
-    status: "processing",
-    failure_reason: null,
-    version: 1,
-    live: true,
-  },
-  {
-    id: "doc-113",
-    filename: "supplier-contract-northwind-2026.pdf",
-    format: "pdf",
-    size_bytes: 2201190,
-    uploader_id: "u-4",
-    uploader: "Tomas Lindqvist",
-    created_at: "2026-10-06T08:02:00",
-    status: "ready",
-    failure_reason: null,
-    version: 1,
-  },
-  {
-    id: "doc-112",
-    filename: "incident-postmortem-2026-09-28.md",
-    format: "md",
-    size_bytes: 47104,
-    uploader_id: "u-1",
-    uploader: "Nadia Rahman",
-    created_at: "2026-10-05T17:40:00",
-    status: "ready",
-    failure_reason: null,
-    version: 1,
-  },
-  {
-    id: "doc-111",
-    filename: "customer-churn-export-sep.csv",
-    format: "csv",
-    size_bytes: 13526630,
-    uploader_id: "u-3",
-    uploader: "Priya Raman",
-    created_at: "2026-10-05T14:21:00",
-    status: "ready",
-    failure_reason: null,
-    version: 1,
-  },
-  {
-    id: "doc-110",
-    filename: "warehouse-safety-handbook-scan.pdf",
-    format: "pdf",
-    size_bytes: 33243136,
-    uploader_id: "u-5",
-    uploader: "Dan Ofori",
-    created_at: "2026-10-05T11:05:00",
-    status: "failed",
-    failure_reason:
-      "No text could be extracted. Scanned or image-only PDFs are not read in this release.",
-    version: 1,
-  },
-  {
-    id: "doc-109",
-    filename: "travel-and-expense-policy-v4.docx",
-    format: "docx",
-    size_bytes: 798720,
-    uploader_id: "u-2",
-    uploader: "Helen Whitcombe",
-    created_at: "2026-10-04T16:33:00",
-    status: "ready",
-    failure_reason: null,
-    version: 2,
-  },
-  {
-    id: "doc-108",
-    filename: "board-pack-october.pdf",
-    format: "pdf",
-    size_bytes: 25480396,
-    uploader_id: "u-4",
-    uploader: "Tomas Lindqvist",
-    created_at: "2026-10-04T09:50:00",
-    status: "queued",
-    failure_reason: null,
-    version: 1,
-    live: true,
-  },
-  {
-    id: "doc-107",
-    filename: "pricing-model-assumptions.csv",
-    format: "csv",
-    size_bytes: 327680,
-    uploader_id: "u-3",
-    uploader: "Priya Raman",
-    created_at: "2026-10-03T15:12:00",
-    status: "ready",
-    failure_reason: null,
-    version: 1,
-  },
-  {
-    id: "doc-106",
-    filename: "onboarding-checklist.md",
-    format: "md",
-    size_bytes: 11264,
-    uploader_id: "u-1",
-    uploader: "Nadia Rahman",
-    created_at: "2026-10-03T10:08:00",
-    status: "ready",
-    failure_reason: null,
-    version: 1,
-  },
-  {
-    id: "doc-105",
-    filename: "legal-retainer-agreement-2025.pdf",
-    format: "pdf",
-    size_bytes: 1468006,
-    uploader_id: "u-2",
-    uploader: "Helen Whitcombe",
-    created_at: "2026-10-02T13:47:00",
-    status: "failed",
-    failure_reason:
-      "The file is password-protected, so it could not be opened for extraction.",
-    version: 1,
-  },
-  {
-    id: "doc-104",
-    filename: "engineering-runbook.docx",
-    format: "docx",
-    size_bytes: 2726297,
-    uploader_id: "u-5",
-    uploader: "Dan Ofori",
-    created_at: "2026-10-02T09:30:00",
-    status: "ready",
-    failure_reason: null,
-    version: 1,
-  },
-  {
-    id: "doc-103",
-    filename: "support-tickets-q3.csv",
-    format: "csv",
-    size_bytes: 43200512,
-    uploader_id: "u-3",
-    uploader: "Priya Raman",
-    created_at: "2026-10-01T18:55:00",
-    status: "ready",
-    failure_reason: null,
-    version: 1,
-  },
-  {
-    id: "doc-102",
-    filename: "brand-guidelines-2026.pdf",
-    format: "pdf",
-    size_bytes: 19712307,
-    uploader_id: "u-2",
-    uploader: "Helen Whitcombe",
-    created_at: "2026-09-30T14:02:00",
-    status: "ready",
-    failure_reason: null,
-    version: 1,
-  },
-  {
-    id: "doc-101",
-    filename: "meeting-notes-2026-09-29.txt",
-    format: "txt",
-    size_bytes: 7168,
-    uploader_id: "u-1",
-    uploader: "Nadia Rahman",
-    created_at: "2026-09-29T16:20:00",
-    status: "ready",
-    failure_reason: null,
-    version: 1,
-  },
-  {
-    id: "doc-100",
-    filename: "data-retention-standard.docx",
-    format: "docx",
-    size_bytes: 552960,
-    uploader_id: "u-4",
-    uploader: "Tomas Lindqvist",
-    created_at: "2026-09-28T11:11:00",
-    status: "failed",
-    failure_reason: "Unreadable file: the DOCX archive is corrupt.",
-    version: 1,
-  },
-];
-
-const MONTHS = [
-  "Jan",
-  "Feb",
-  "Mar",
-  "Apr",
-  "May",
-  "Jun",
-  "Jul",
-  "Aug",
-  "Sep",
-  "Oct",
-  "Nov",
-  "Dec",
-];
+const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
 
 const PAGE_SIZE = 8;
 
+interface RejectedFile {
+  name: string;
+  reason: string;
+}
+
+interface ReplacePrompt {
+  duplicates: { filename: string; existing_document_id: string }[];
+  queuedCount: number;
+}
+
 export default function Screen() {
   const navigate = useNavigate();
-  const [documents, setDocuments] = React.useState(SEED_DOCUMENTS);
+  const [documents, setDocuments] = React.useState<DocumentItem[]>([]);
+  const [loading, setLoading] = React.useState(true);
+  const [loadError, setLoadError] = React.useState<string | null>(null);
+  const [uploading, setUploading] = React.useState(false);
+
   const [query, setQuery] = React.useState("");
-  const [statusFilter, setStatusFilter] = React.useState("all");
+  const [statusFilter, setStatusFilter] = React.useState<"all" | StatusKey>("all");
   const [formatFilter, setFormatFilter] = React.useState("all");
   const [page, setPage] = React.useState(1);
   const [dragging, setDragging] = React.useState(false);
-  const [rejections, setRejections] = React.useState([]);
+  const [rejections, setRejections] = React.useState<RejectedFile[]>([]);
   const [notice, setNotice] = React.useState("");
-  const [deleteTarget, setDeleteTarget] = React.useState(null);
-  const [replacePrompt, setReplacePrompt] = React.useState(null);
+  const [deleteTarget, setDeleteTarget] = React.useState<DocumentItem | null>(null);
+  const [replacePrompt, setReplacePrompt] = React.useState<ReplacePrompt | null>(null);
 
-  const fileInputRef = React.useRef(null);
-  const confirmRef = React.useRef(null);
-  const returnFocusRef = React.useRef(null);
-  const counterRef = React.useRef(200);
+  const fileInputRef = React.useRef<HTMLInputElement | null>(null);
+  const confirmRef = React.useRef<HTMLButtonElement | null>(null);
+  const returnFocusRef = React.useRef<HTMLElement | null>(null);
+  const pendingFilesRef = React.useRef<Map<string, File>>(new Map());
 
   const dialogOpen = Boolean(deleteTarget) || Boolean(replacePrompt);
 
-  // Background worker simulation: queued -> processing -> ready.
-  React.useEffect(() => {
-    const timers = [];
-    documents.forEach((doc) => {
-      if (!doc.live) return;
-      if (doc.status === "queued") {
-        timers.push(
-          window.setTimeout(() => {
-            setDocuments((prev) =>
-              prev.map((d) =>
-                d.id === doc.id ? { ...d, status: "processing" } : d
-              )
-            );
-          }, 2600)
-        );
-      } else if (doc.status === "processing") {
-        timers.push(
-          window.setTimeout(() => {
-            setDocuments((prev) =>
-              prev.map((d) =>
-                d.id === doc.id
-                  ? { ...d, status: "ready", live: false, failure_reason: null }
-                  : d
-              )
-            );
-          }, 4200)
-        );
+  const fetchAll = React.useCallback(async () => {
+    setLoading(true);
+    setLoadError(null);
+    try {
+      let items: DocumentItem[] = [];
+      let nextPage: number | null = 1;
+      while (nextPage !== null) {
+        const res = await listDocuments({ page: nextPage, page_size: 100 });
+        items = items.concat(res.items);
+        nextPage = res.next;
       }
-    });
-    return () => timers.forEach((t) => window.clearTimeout(t));
-  }, [documents]);
+      setDocuments(items);
+    } catch {
+      setLoadError("Could not load the document library. Check your connection and try again.");
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
+  React.useEffect(() => {
+    fetchAll();
+  }, [fetchAll]);
 
   React.useEffect(() => {
     if (dialogOpen && confirmRef.current) confirmRef.current.focus();
   }, [dialogOpen]);
 
-  const fmtSize = (bytes) => {
+  const fmtSize = (bytes: number) => {
     if (bytes >= 1048576) return (bytes / 1048576).toFixed(1) + " MB";
     if (bytes >= 1024) return Math.round(bytes / 1024) + " KB";
     return bytes + " B";
   };
 
-  const fmtDate = (iso) => {
+  const fmtDate = (iso: string) => {
     const d = new Date(iso);
     const hh = String(d.getHours()).padStart(2, "0");
     const mm = String(d.getMinutes()).padStart(2, "0");
@@ -330,7 +134,13 @@ export default function Screen() {
   };
 
   const counts = React.useMemo(() => {
-    const base = { all: documents.length, queued: 0, processing: 0, ready: 0, failed: 0 };
+    const base: Record<"all" | StatusKey, number> = {
+      all: documents.length,
+      queued: 0,
+      processing: 0,
+      ready: 0,
+      failed: 0,
+    };
     documents.forEach((d) => {
       base[d.status] += 1;
     });
@@ -343,10 +153,7 @@ export default function Screen() {
       if (statusFilter !== "all" && d.status !== statusFilter) return false;
       if (formatFilter !== "all" && d.format !== formatFilter) return false;
       if (!q) return true;
-      return (
-        d.filename.toLowerCase().includes(q) ||
-        d.uploader.toLowerCase().includes(q)
-      );
+      return d.filename.toLowerCase().includes(q) || d.uploader.toLowerCase().includes(q);
     });
   }, [documents, query, statusFilter, formatFilter]);
 
@@ -357,51 +164,18 @@ export default function Screen() {
 
   const resetPaging = () => setPage(1);
 
-  const addDocuments = (incoming, replacedIds) => {
-    const stamp = new Date().toISOString();
-    const created = incoming.map((f, i) => {
-      counterRef.current += 1;
-      return {
-        id: "doc-" + counterRef.current,
-        filename: f.name,
-        format: f.format,
-        size_bytes: f.size,
-        uploader_id: CURRENT_USER.id,
-        uploader: CURRENT_USER.name,
-        created_at: stamp,
-        status: "queued",
-        failure_reason: null,
-        version: f.version || 1,
-        live: true,
-        isNew: true,
-        _order: i,
-      };
-    });
-    setDocuments((prev) => {
-      const kept = replacedIds && replacedIds.length
-        ? prev.filter((d) => !replacedIds.includes(d.id))
-        : prev;
-      return [...created, ...kept];
-    });
-    setStatusFilter("all");
-    setFormatFilter("all");
-    setQuery("");
-    resetPaging();
-  };
-
-  const handleFiles = (fileList) => {
-    const files = Array.from(fileList || []);
+  const handleFiles = async (fileList: FileList | null) => {
+    const files = Array.from(fileList ?? []);
     if (!files.length) return;
-    const rejected = [];
-    const accepted = [];
+    const rejected: RejectedFile[] = [];
+    const accepted: File[] = [];
 
     files.forEach((file) => {
       const ext = (file.name.split(".").pop() || "").toLowerCase();
       if (!ACCEPTED_FORMATS.includes(ext)) {
         rejected.push({
           name: file.name,
-          reason:
-            "Unsupported format. The library accepts PDF, DOCX, TXT, CSV and Markdown only.",
+          reason: "Unsupported format. The library accepts PDF, DOCX, TXT, CSV and Markdown only.",
         });
       } else if (file.size > MAX_BYTES) {
         rejected.push({
@@ -409,34 +183,62 @@ export default function Screen() {
           reason: `${fmtSize(file.size)} is over the 50MB limit per file. Nothing was stored.`,
         });
       } else {
-        accepted.push({ name: file.name, size: file.size, format: ext });
+        accepted.push(file);
       }
     });
 
     setRejections(rejected);
 
-    const duplicates = accepted.filter((a) =>
-      documents.some(
-        (d) => d.filename.toLowerCase() === a.name.toLowerCase()
-      )
-    );
-
-    if (duplicates.length) {
-      setReplacePrompt({
-        duplicates,
-        fresh: accepted.filter((a) => !duplicates.includes(a)),
-      });
-      returnFocusRef.current = document.activeElement;
+    if (!accepted.length) {
+      setNotice(rejected.length ? "Nothing was uploaded. See the rejected files below." : "");
       return;
     }
 
-    if (accepted.length) {
-      addDocuments(accepted);
-      setNotice(
-        `${accepted.length} file${accepted.length === 1 ? "" : "s"} queued for processing.`
-      );
-    } else if (rejected.length) {
-      setNotice("Nothing was uploaded. See the rejected files below.");
+    setUploading(true);
+    try {
+      const results = await uploadDocuments(accepted);
+      const fileMap = new Map(accepted.map((f) => [f.name, f]));
+      const duplicates = results.filter((r) => r.status === "duplicate");
+      const apiRejected = results.filter((r) => r.status === "rejected");
+      const queuedCount = results.filter((r) => r.status === "queued").length;
+
+      if (apiRejected.length) {
+        setRejections((prev) => [
+          ...prev,
+          ...apiRejected.map((r) => ({
+            name: r.filename,
+            reason: r.error ?? "Rejected by the server.",
+          })),
+        ]);
+      }
+
+      if (duplicates.length) {
+        pendingFilesRef.current = fileMap;
+        returnFocusRef.current = document.activeElement as HTMLElement | null;
+        setReplacePrompt({
+          duplicates: duplicates.map((d) => ({
+            filename: d.filename,
+            existing_document_id: d.existing_document_id ?? "",
+          })),
+          queuedCount,
+        });
+      } else {
+        pendingFilesRef.current = new Map();
+        if (queuedCount) {
+          setNotice(`${queuedCount} file${queuedCount === 1 ? "" : "s"} queued for processing.`);
+        } else if (rejected.length || apiRejected.length) {
+          setNotice("Nothing was uploaded. See the rejected files below.");
+        }
+      }
+
+      if (queuedCount) {
+        resetPaging();
+        await fetchAll();
+      }
+    } catch {
+      setNotice("Upload failed. Please check your connection and try again.");
+    } finally {
+      setUploading(false);
     }
   };
 
@@ -447,64 +249,77 @@ export default function Screen() {
     if (el && typeof el.focus === "function") el.focus();
   };
 
-  const confirmReplace = () => {
-    const { duplicates, fresh } = replacePrompt;
-    const replacedIds = [];
-    const asUploads = duplicates.map((d) => {
-      const existing = documents.find(
-        (x) => x.filename.toLowerCase() === d.name.toLowerCase()
-      );
-      if (existing) replacedIds.push(existing.id);
-      return { ...d, version: existing ? existing.version + 1 : 1 };
+  const confirmReplace = async () => {
+    if (!replacePrompt) return;
+    const { duplicates } = replacePrompt;
+    const files: File[] = [];
+    const ids: string[] = [];
+    duplicates.forEach((d) => {
+      const file = pendingFilesRef.current.get(d.filename);
+      if (file) {
+        files.push(file);
+        ids.push(d.existing_document_id);
+      }
     });
-    addDocuments([...asUploads, ...fresh], replacedIds);
-    setNotice(
-      `${duplicates.length} existing document${
-        duplicates.length === 1 ? " was" : "s were"
-      } superseded. Previous chunks and embeddings are removed once the new version is ready.`
-    );
     closeDialogs();
+    pendingFilesRef.current = new Map();
+    if (!files.length) return;
+
+    setUploading(true);
+    try {
+      await uploadDocuments(files, ids);
+      setNotice(
+        `${files.length} file${files.length === 1 ? "" : "s"} re-uploaded to replace the existing version. The list has been refreshed to show the new version queued.`,
+      );
+      resetPaging();
+      await fetchAll();
+    } catch {
+      setNotice("The replacement upload failed. Please check your connection and try again.");
+    } finally {
+      setUploading(false);
+    }
   };
 
   const skipReplace = () => {
-    const { duplicates, fresh } = replacePrompt;
-    if (fresh.length) {
-      addDocuments(fresh);
-      setNotice(
-        `${fresh.length} file${fresh.length === 1 ? "" : "s"} queued. ${
-          duplicates.length
-        } skipped because a version already exists.`
-      );
-    } else {
-      setNotice("Upload cancelled. The existing version is still in place.");
+    if (!replacePrompt) return;
+    const { duplicates, queuedCount } = replacePrompt;
+    const parts: string[] = [];
+    if (queuedCount) {
+      parts.push(`${queuedCount} file${queuedCount === 1 ? "" : "s"} queued for processing.`);
     }
+    parts.push(
+      `${duplicates.length} existing version${duplicates.length === 1 ? "" : "s"} ${
+        duplicates.length === 1 ? "is" : "are"
+      } still in place; nothing was uploaded for ${duplicates.length === 1 ? "it" : "them"}.`,
+    );
+    setNotice(parts.join(" "));
+    pendingFilesRef.current = new Map();
     closeDialogs();
   };
 
   const confirmDelete = () => {
     const doc = deleteTarget;
+    if (!doc) return;
     setDocuments((prev) => prev.filter((d) => d.id !== doc.id));
     setNotice(
-      `${doc.filename} deleted. Its chunks, embeddings and original file have been removed.`
+      `${doc.filename} deleted. Its chunks, embeddings and original file have been removed.`,
     );
     closeDialogs();
   };
 
-  const canDelete = (doc) =>
-    doc.uploader_id === CURRENT_USER.id || CURRENT_USER.role === "admin";
+  const canDelete = (doc: DocumentItem) =>
+    doc.uploader === CURRENT_USER.name || CURRENT_USER.role === "admin";
 
-  const requestDelete = (doc, event) => {
+  const requestDelete = (doc: DocumentItem, event: React.MouseEvent<HTMLButtonElement>) => {
     if (!canDelete(doc)) {
-      setNotice(
-        `Only ${doc.uploader} or a workspace admin can delete ${doc.filename}.`
-      );
+      setNotice(`Only ${doc.uploader} or a workspace admin can delete ${doc.filename}.`);
       return;
     }
     returnFocusRef.current = event.currentTarget;
     setDeleteTarget(doc);
   };
 
-  const onDialogKeyDown = (event) => {
+  const onDialogKeyDown = (event: React.KeyboardEvent) => {
     if (event.key === "Escape") {
       event.stopPropagation();
       closeDialogs();
@@ -514,7 +329,7 @@ export default function Screen() {
   const focusRing =
     "focus:outline-none focus-visible:ring-2 focus-visible:ring-offset-2 focus-visible:ring-emerald-800";
 
-  const StatusTag = ({ status }) => {
+  const StatusTag = ({ status }: { status: StatusKey }) => {
     const meta = STATUS_META[status];
     const Icon = Icons[meta.icon];
     return (
@@ -528,7 +343,7 @@ export default function Screen() {
     );
   };
 
-  const filterButtons = [
+  const filterButtons: { key: "all" | StatusKey; label: string }[] = [
     { key: "all", label: "All" },
     { key: "ready", label: "Ready" },
     { key: "processing", label: "Processing" },
@@ -563,8 +378,8 @@ export default function Screen() {
             Drag files here, or choose them below
           </p>
           <p className="mt-1.5 text-sm leading-relaxed" style={{ color: brand.neutralColor }}>
-            PDF, DOCX, TXT, CSV and Markdown, up to 50MB each. Several files at a
-            time is fine — each one is tracked separately.
+            PDF, DOCX, TXT, CSV and Markdown, up to 50MB each. Several files at a time is fine —
+            each one is tracked separately.
           </p>
         </div>
         <div className="shrink-0">
@@ -580,13 +395,14 @@ export default function Screen() {
             ref={fileInputRef}
             type="file"
             multiple
+            disabled={uploading}
             accept=".pdf,.docx,.txt,.csv,.md"
             onChange={(e) => {
               handleFiles(e.target.files);
               e.target.value = "";
             }}
             className={
-              "block w-full max-w-xs cursor-pointer rounded-md border bg-white text-sm file:mr-3 file:cursor-pointer file:rounded-l-md file:border-0 file:px-4 file:py-2.5 file:text-sm file:font-semibold file:text-white " +
+              "block w-full max-w-xs cursor-pointer rounded-md border bg-white text-sm file:mr-3 file:cursor-pointer file:rounded-l-md file:border-0 file:px-4 file:py-2.5 file:text-sm file:font-semibold file:text-white disabled:cursor-not-allowed disabled:opacity-60 " +
               focusRing
             }
             style={{
@@ -616,13 +432,9 @@ export default function Screen() {
             >
               Document library
             </h1>
-            <p
-              className="mt-3 text-base leading-relaxed"
-              style={{ color: brand.neutralColor }}
-            >
-              Everything the team has uploaded, shared across the workspace. The
-              assistant answers only from documents marked ready — nothing else
-              is retrieved or cited.
+            <p className="mt-3 text-base leading-relaxed" style={{ color: brand.neutralColor }}>
+              Everything the team has uploaded, shared across the workspace. The assistant answers
+              only from documents marked ready — nothing else is retrieved or cited.
             </p>
           </div>
           <div className="flex shrink-0 items-center gap-2">
@@ -643,15 +455,16 @@ export default function Screen() {
             </Button>
             <Button
               type="button"
+              disabled={uploading}
               onClick={() => fileInputRef.current && fileInputRef.current.click()}
               className={
-                "inline-flex items-center gap-2 rounded-md px-4 py-2.5 text-sm font-semibold text-white " +
+                "inline-flex items-center gap-2 rounded-md px-4 py-2.5 text-sm font-semibold text-white disabled:opacity-60 " +
                 focusRing
               }
               style={{ backgroundColor: brand.primaryColor }}
             >
               <Icons.Upload className="h-4 w-4" aria-hidden="true" />
-              Upload files
+              {uploading ? "Uploading…" : "Upload files"}
             </Button>
           </div>
         </header>
@@ -714,7 +527,8 @@ export default function Screen() {
                 />
                 <div className="flex-1">
                   <h3 className="text-sm font-semibold" style={{ color: "#8C2F23" }}>
-                    {rejections.length} file{rejections.length === 1 ? "" : "s"} rejected before upload
+                    {rejections.length} file{rejections.length === 1 ? "" : "s"} rejected before
+                    upload
                   </h3>
                   <ul className="mt-2 space-y-1.5">
                     {rejections.map((r) => (
@@ -753,12 +567,52 @@ export default function Screen() {
               All documents
             </h2>
             <p className="text-sm" style={{ color: brand.neutralColor }}>
-              Signed in as {CURRENT_USER.name} ({CURRENT_USER.role}). You can delete
-              documents you uploaded; admins can delete any.
+              Signed in as {CURRENT_USER.name} ({CURRENT_USER.role}). You can delete documents you
+              uploaded; admins can delete any.
             </p>
           </div>
 
-          {documents.length === 0 ? (
+          {loading ? (
+            <div
+              className="mt-5 rounded-lg border bg-white px-6 py-14 text-center"
+              style={{ borderColor: "rgba(110,103,91,0.25)" }}
+            >
+              <p className="text-sm" style={{ color: brand.neutralColor }}>
+                Loading the document library…
+              </p>
+            </div>
+          ) : loadError ? (
+            <div
+              className="mt-5 rounded-lg border bg-white px-6 py-14 text-center"
+              style={{ borderColor: "rgba(140,47,35,0.35)" }}
+            >
+              <Icons.AlertCircle
+                className="mx-auto h-8 w-8"
+                aria-hidden="true"
+                style={{ color: "#8C2F23" }}
+              />
+              <h3
+                className="mt-4 text-base font-semibold"
+                style={{ color: "#241F18", fontFamily: brand.fontHeading }}
+              >
+                Could not load the library
+              </h3>
+              <p className="mx-auto mt-2 max-w-md text-sm leading-relaxed" style={{ color: brand.neutralColor }}>
+                {loadError}
+              </p>
+              <Button
+                type="button"
+                onClick={() => fetchAll()}
+                className={
+                  "mt-6 inline-flex items-center gap-2 rounded-md px-4 py-2.5 text-sm font-semibold text-white " +
+                  focusRing
+                }
+                style={{ backgroundColor: brand.primaryColor }}
+              >
+                Try again
+              </Button>
+            </div>
+          ) : documents.length === 0 ? (
             <div
               className="mt-5 rounded-lg border bg-white px-6 py-14 text-center"
               style={{ borderColor: "rgba(110,103,91,0.25)" }}
@@ -778,9 +632,9 @@ export default function Screen() {
                 className="mx-auto mt-2 max-w-md text-sm leading-relaxed"
                 style={{ color: brand.neutralColor }}
               >
-                The assistant can only answer from documents uploaded here. Add a
-                PDF, DOCX, TXT, CSV or Markdown file and it becomes searchable for
-                the whole team once processing finishes.
+                The assistant can only answer from documents uploaded here. Add a PDF, DOCX, TXT,
+                CSV or Markdown file and it becomes searchable for the whole team once processing
+                finishes.
               </p>
               <Button
                 type="button"
@@ -824,8 +678,7 @@ export default function Screen() {
                         }}
                         placeholder="File name or uploader"
                         className={
-                          "w-full rounded-md border bg-white py-2.5 pl-9 pr-3 text-sm " +
-                          focusRing
+                          "w-full rounded-md border bg-white py-2.5 pl-9 pr-3 text-sm " + focusRing
                         }
                         style={{
                           borderColor: "rgba(110,103,91,0.35)",
@@ -851,8 +704,7 @@ export default function Screen() {
                         resetPaging();
                       }}
                       className={
-                        "w-full rounded-md border bg-white px-3 py-2.5 text-sm " +
-                        focusRing
+                        "w-full rounded-md border bg-white px-3 py-2.5 text-sm " + focusRing
                       }
                       style={{
                         borderColor: "rgba(110,103,91,0.35)",
@@ -898,9 +750,7 @@ export default function Screen() {
                             focusRing
                           }
                           style={{
-                            borderColor: active
-                              ? brand.primaryColor
-                              : "rgba(110,103,91,0.30)",
+                            borderColor: active ? brand.primaryColor : "rgba(110,103,91,0.30)",
                             backgroundColor: active ? brand.primaryColor : "#FFFFFF",
                             color: active ? "#FFFFFF" : "#241F18",
                           }}
@@ -944,8 +794,8 @@ export default function Screen() {
                       style={{ color: brand.neutralColor }}
                     >
                       {documents.length} document
-                      {documents.length === 1 ? " is" : "s are"} in the library. Try a
-                      different search term, format or status.
+                      {documents.length === 1 ? " is" : "s are"} in the library. Try a different
+                      search term, format or status.
                     </p>
                     <Button
                       type="button"
@@ -1033,10 +883,7 @@ export default function Screen() {
                               className="align-top hover:bg-stone-50"
                               style={{ borderTop: "1px solid rgba(110,103,91,0.18)" }}
                             >
-                              <TH
-                                scope="row"
-                                className="px-5 py-4 text-left font-normal"
-                              >
+                              <TH scope="row" className="px-5 py-4 text-left font-normal">
                                 <span
                                   className="block text-sm font-semibold"
                                   style={{ color: "#241F18" }}
@@ -1048,9 +895,7 @@ export default function Screen() {
                                   style={{ color: brand.neutralColor }}
                                 >
                                   {fmtDate(doc.created_at)}
-                                  {doc.version > 1
-                                    ? ` · version ${doc.version}, supersedes earlier upload`
-                                    : ""}
+                                  {doc.supersedes_document_id ? " · supersedes an earlier version" : ""}
                                   <span className="lg:hidden"> · {doc.uploader}</span>
                                 </span>
                                 {doc.status === "failed" && doc.failure_reason ? (
@@ -1059,6 +904,14 @@ export default function Screen() {
                                     style={{ color: "#8C2F23" }}
                                   >
                                     {doc.failure_reason}
+                                    {doc.previous_version_retained !== null ? (
+                                      <>
+                                        {" "}
+                                        {doc.previous_version_retained
+                                          ? "The previous version is still in place and remains searchable."
+                                          : "The previous version was not retained; nothing from it is searchable now."}
+                                      </>
+                                    ) : null}
                                   </span>
                                 ) : null}
                                 {doc.status !== "failed" ? (
@@ -1069,7 +922,7 @@ export default function Screen() {
                                 className="hidden px-5 py-4 text-sm md:table-cell"
                                 style={{ color: brand.neutralColor }}
                               >
-                                {FORMAT_LABELS[doc.format]}
+                                {FORMAT_LABELS[doc.format] ?? doc.format}
                               </TD>
                               <TD
                                 className="hidden whitespace-nowrap px-5 py-4 text-sm tabular-nums sm:table-cell"
@@ -1082,7 +935,7 @@ export default function Screen() {
                                 style={{ color: brand.neutralColor }}
                               >
                                 {doc.uploader}
-                                {doc.uploader_id === CURRENT_USER.id ? (
+                                {doc.uploader === CURRENT_USER.name ? (
                                   <span
                                     className="ml-1.5 text-xs"
                                     style={{ color: brand.accentColor }}
@@ -1110,18 +963,13 @@ export default function Screen() {
                                       }}
                                     >
                                       Ask in chat
-                                      <span className="sr-only">
-                                        {" "}
-                                        about {doc.filename}
-                                      </span>
+                                      <span className="sr-only"> about {doc.filename}</span>
                                     </button>
                                   ) : null}
                                   <button
                                     type="button"
                                     onClick={() =>
-                                      setNotice(
-                                        `Downloading the original file ${doc.filename}.`
-                                      )
+                                      setNotice(`Downloading the original file ${doc.filename}.`)
                                     }
                                     aria-label={`Download original file ${doc.filename}`}
                                     className={"rounded-md p-2 hover:bg-stone-100 " + focusRing}
@@ -1138,13 +986,9 @@ export default function Screen() {
                                         ? `Delete ${doc.filename}`
                                         : `Delete ${doc.filename} (not available — only the uploader or an admin can delete this)`
                                     }
-                                    className={
-                                      "rounded-md p-2 hover:bg-stone-100 " + focusRing
-                                    }
+                                    className={"rounded-md p-2 hover:bg-stone-100 " + focusRing}
                                     style={{
-                                      color: canDelete(doc)
-                                        ? "#8C2F23"
-                                        : "rgba(110,103,91,0.45)",
+                                      color: canDelete(doc) ? "#8C2F23" : "rgba(110,103,91,0.45)",
                                     }}
                                   >
                                     <Icons.Trash className="h-4 w-4" aria-hidden="true" />
@@ -1244,24 +1088,21 @@ export default function Screen() {
               style={{ color: brand.neutralColor }}
             >
               The library already holds{" "}
-              {replacePrompt.duplicates.length === 1
-                ? "a document"
-                : "documents"}{" "}
-              with the same file name. Replacing supersedes the previous version:
-              once the new file is processed, the old chunks and embeddings are
-              removed and only the new content is retrievable.
+              {replacePrompt.duplicates.length === 1 ? "a document" : "documents"} with the same
+              file name. Replacing supersedes the previous version: once the new file is processed,
+              the old chunks and embeddings are removed and only the new content is retrievable.
             </p>
             <ul className="mt-4 space-y-2">
               {replacePrompt.duplicates.map((d) => (
                 <li
-                  key={d.name}
+                  key={d.filename}
                   className="rounded-md px-3 py-2 text-sm font-medium"
                   style={{
                     backgroundColor: "rgba(193,118,26,0.10)",
                     color: "#7A4A10",
                   }}
                 >
-                  {d.name}
+                  {d.filename}
                 </li>
               ))}
             </ul>
@@ -1270,8 +1111,7 @@ export default function Screen() {
                 type="button"
                 onClick={skipReplace}
                 className={
-                  "rounded-md border bg-transparent px-4 py-2.5 text-sm font-medium " +
-                  focusRing
+                  "rounded-md border bg-transparent px-4 py-2.5 text-sm font-medium " + focusRing
                 }
                 style={{ borderColor: "rgba(110,103,91,0.35)", color: "#241F18" }}
               >
@@ -1281,8 +1121,10 @@ export default function Screen() {
                 type="button"
                 ref={confirmRef}
                 onClick={confirmReplace}
+                disabled={uploading}
                 className={
-                  "rounded-md px-4 py-2.5 text-sm font-semibold text-white " + focusRing
+                  "rounded-md px-4 py-2.5 text-sm font-semibold text-white disabled:opacity-60 " +
+                  focusRing
                 }
                 style={{ backgroundColor: brand.primaryColor }}
               >
@@ -1322,10 +1164,9 @@ export default function Screen() {
               className="mt-3 text-sm leading-relaxed"
               style={{ color: brand.neutralColor }}
             >
-              The document, its chunks and its embeddings are removed, and the
-              original file is deleted from storage. Existing answers that cite it
-              will report that the source is no longer available. This cannot be
-              undone.
+              The document, its chunks and its embeddings are removed, and the original file is
+              deleted from storage. Existing answers that cite it will report that the source is no
+              longer available. This cannot be undone.
             </p>
             <div className="mt-6 flex flex-wrap justify-end gap-2">
               <Button
@@ -1333,8 +1174,7 @@ export default function Screen() {
                 ref={confirmRef}
                 onClick={closeDialogs}
                 className={
-                  "rounded-md border bg-transparent px-4 py-2.5 text-sm font-medium " +
-                  focusRing
+                  "rounded-md border bg-transparent px-4 py-2.5 text-sm font-medium " + focusRing
                 }
                 style={{ borderColor: "rgba(110,103,91,0.35)", color: "#241F18" }}
               >
@@ -1343,9 +1183,7 @@ export default function Screen() {
               <Button
                 type="button"
                 onClick={confirmDelete}
-                className={
-                  "rounded-md px-4 py-2.5 text-sm font-semibold text-white " + focusRing
-                }
+                className={"rounded-md px-4 py-2.5 text-sm font-semibold text-white " + focusRing}
                 style={{ backgroundColor: "#8C2F23" }}
               >
                 Delete document

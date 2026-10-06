@@ -10,11 +10,11 @@ import json
 import uuid
 from datetime import datetime
 
-from sqlalchemy import DateTime, ForeignKey, Integer, String, Text, Uuid
+from sqlalchemy import DateTime, ForeignKey, Integer, String, Text, Uuid, event
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 from sqlalchemy.types import TypeDecorator
 
-from app.database import Base
+from app.database import Base, engine
 
 EMBEDDING_DIM = 1536
 
@@ -106,9 +106,18 @@ class Document(Base):
     status: Mapped[str] = mapped_column(String(20), default="queued")
     failure_reason: Mapped[str | None] = mapped_column(String(1024), nullable=True)
     version: Mapped[int] = mapped_column(Integer, default=1)
+    # Set only on a re-upload submitted with `replace_document_ids` naming an
+    # existing document (AC-032). Nullable and additive so an ordinary upload
+    # leaves this column untouched; the worker reads it after the replacement
+    # reaches 'ready' to retire the document it names (see app/ingestion.py),
+    # and GET /documents reads it to report whether that retirement has
+    # happened yet (`previous_version_retained`, AC-033).
+    supersedes_document_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("documents.id"), nullable=True
+    )
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
 
-    chunks: Mapped[list["Chunk"]] = relationship(
+    chunks: Mapped[list[Chunk]] = relationship(
         back_populates="document", cascade="all, delete-orphan"
     )
 
@@ -142,7 +151,7 @@ class Conversation(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
 
-    messages: Mapped[list["Message"]] = relationship(
+    messages: Mapped[list[Message]] = relationship(
         back_populates="conversation", cascade="all, delete-orphan"
     )
 
@@ -158,7 +167,7 @@ class Message(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
 
     conversation: Mapped[Conversation] = relationship(back_populates="messages")
-    citations: Mapped[list["Citation"]] = relationship(
+    citations: Mapped[list[Citation]] = relationship(
         back_populates="message", cascade="all, delete-orphan"
     )
 
@@ -170,13 +179,32 @@ class Citation(Base):
     message_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("messages.id"))
     chunk_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("chunks.id"), nullable=True)
     marker: Mapped[int] = mapped_column(Integer)
-    document_id: Mapped[uuid.UUID | None] = mapped_column(
-        ForeignKey("documents.id"), nullable=True
-    )
+    document_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("documents.id"), nullable=True)
     snapshot_text: Mapped[str] = mapped_column(Text)
     location_label: Mapped[str | None] = mapped_column(String(100), nullable=True)
 
     message: Mapped[Message] = relationship(back_populates="citations")
+
+
+if engine.dialect.name == "sqlite":
+    # `Base.metadata.create_all` (see app/main.py) only creates tables that
+    # do not yet exist -- it never alters one already on disk. A `documents`
+    # table created before `supersedes_document_id` existed would otherwise
+    # be stuck missing it forever on a long-lived local SQLite file. This
+    # mirrors the pgvector-extension-on-connect pattern in app/database.py:
+    # a one-time, additive-only check on every new connection, cheap enough
+    # (`PRAGMA table_info`) to run unconditionally.
+    @event.listens_for(engine, "connect")
+    def _ensure_documents_supersedes_column(dbapi_connection, _connection_record) -> None:
+        cursor = dbapi_connection.cursor()
+        cursor.execute("PRAGMA table_info(documents)")
+        columns = {row[1] for row in cursor.fetchall()}
+        if columns and "supersedes_document_id" not in columns:
+            cursor.execute(
+                "ALTER TABLE documents ADD COLUMN supersedes_document_id VARCHAR(32)"
+            )
+            dbapi_connection.commit()
+        cursor.close()
 
 
 __all__ = [
