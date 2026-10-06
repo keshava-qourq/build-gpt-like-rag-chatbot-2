@@ -663,7 +663,8 @@ export default function Screen() {
   const statusLabel = (msg: ChatMessage) => {
     if (msg.status === "streaming") return { text: "Streaming", icon: Clock, color: "#6E675B" };
     if (msg.status === "stopped") return { text: "Stopped", icon: X, color: "#8A5312" };
-    if (msg.status === "error") return { text: "Stream failed", icon: AlertCircle, color: "#9B3B2F" };
+    if (msg.status === "error")
+      return { text: "Stream failed", icon: AlertCircle, color: "#9B3B2F" };
     return null;
   };
 
@@ -894,7 +895,11 @@ export default function Screen() {
         >
           <Package className="h-4 w-4" aria-hidden="true" />
           Document library
-          <ChevronRight className="ml-auto h-4 w-4" style={{ color: "#8D8576" }} aria-hidden="true" />
+          <ChevronRight
+            className="ml-auto h-4 w-4"
+            style={{ color: "#8D8576" }}
+            aria-hidden="true"
+          />
         </button>
         <button
           type="button"
@@ -907,7 +912,11 @@ export default function Screen() {
         >
           <AlertCircle className="h-4 w-4" aria-hidden="true" />
           Help and limitations
-          <ChevronRight className="ml-auto h-4 w-4" style={{ color: "#8D8576" }} aria-hidden="true" />
+          <ChevronRight
+            className="ml-auto h-4 w-4"
+            style={{ color: "#8D8576" }}
+            aria-hidden="true"
+          />
         </button>
       </div>
     </div>
@@ -1064,7 +1073,11 @@ export default function Screen() {
                         }
                         style={{ borderColor: BORDER, color: "#3A3630" }}
                       >
-                        <Search className="h-4 w-4 shrink-0" style={{ color: "#8D8576" }} aria-hidden="true" />
+                        <Search
+                          className="h-4 w-4 shrink-0"
+                          style={{ color: "#8D8576" }}
+                          aria-hidden="true"
+                        />
                         {s}
                       </button>
                     </li>
@@ -1137,7 +1150,11 @@ export default function Screen() {
                             ? "The answer stream was interrupted. The partial text above was kept."
                             : "The answer stream was interrupted before any text arrived. Nothing was saved for this turn."}
                         </p>
-                        <Button variant="outline" onClick={() => retry(msg.id)} className={"mt-3 " + RING}>
+                        <Button
+                          variant="outline"
+                          onClick={() => retry(msg.id)}
+                          className={"mt-3 " + RING}
+                        >
                           <ArrowRight className="mr-2 h-4 w-4" aria-hidden="true" />
                           Retry
                         </Button>
@@ -1258,7 +1275,12 @@ export default function Screen() {
                 library.
               </p>
               {streamingMsgId ? (
-                <Button type="button" variant="outline" onClick={handleStop} className={"shrink-0 " + RING}>
+                <Button
+                  type="button"
+                  variant="outline"
+                  onClick={handleStop}
+                  className={"shrink-0 " + RING}
+                >
                   <X className="mr-2 h-4 w-4" aria-hidden="true" />
                   Stop
                 </Button>
@@ -1372,7 +1394,10 @@ export default function Screen() {
                     color: "#7A3227",
                   }}
                 >
-                  <AlertCircle className="mr-1.5 inline h-3.5 w-3.5 align-text-bottom" aria-hidden="true" />
+                  <AlertCircle
+                    className="mr-1.5 inline h-3.5 w-3.5 align-text-bottom"
+                    aria-hidden="true"
+                  />
                   This document has been removed from the library. The passage below is the copy
                   stored with the answer; the original file is no longer available to download.
                 </p>
@@ -1403,7 +1428,10 @@ export default function Screen() {
               </p>
               {downloadNote ? (
                 <p className="mb-2 text-[12px]" style={{ color: "#1B5240" }}>
-                  <CheckCircle className="mr-1 inline h-3.5 w-3.5 align-text-bottom" aria-hidden="true" />
+                  <CheckCircle
+                    className="mr-1 inline h-3.5 w-3.5 align-text-bottom"
+                    aria-hidden="true"
+                  />
                   {downloadNote}
                 </p>
               ) : null}

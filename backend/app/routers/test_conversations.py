@@ -199,9 +199,7 @@ def test_rename_and_delete_persist(user_and_headers) -> None:
     create = client.post("/conversations", headers=headers)
     conv_id = create.json()["id"]
 
-    rename = client.patch(
-        f"/conversations/{conv_id}", headers=headers, json={"title": "New Title"}
-    )
+    rename = client.patch(f"/conversations/{conv_id}", headers=headers, json={"title": "New Title"})
     assert rename.status_code == 200
     assert rename.json()["title"] == "New Title"
 
@@ -300,9 +298,7 @@ def test_post_message_persists_user_turn_streams_tokens_and_citations(
 
 
 def test_post_message_requires_auth() -> None:
-    response = client.post(
-        f"/conversations/{uuid.uuid4()}/messages", json={"content": "hi"}
-    )
+    response = client.post(f"/conversations/{uuid.uuid4()}/messages", json={"content": "hi"})
     assert response.status_code == 401
 
 

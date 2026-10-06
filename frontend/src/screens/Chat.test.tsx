@@ -101,17 +101,13 @@ describe("Chat screen", () => {
   it("shows an empty state when there are no conversations", async () => {
     mocked.listConversations.mockResolvedValue([]);
     renderScreen();
-    expect(
-      await screen.findByText(/No conversations yet\. Start a new chat/i),
-    ).toBeInTheDocument();
+    expect(await screen.findByText(/No conversations yet\. Start a new chat/i)).toBeInTheDocument();
   });
 
   it("shows an error state with retry when the conversation list fails to load", async () => {
     mocked.listConversations.mockRejectedValueOnce(new Error("network down"));
     renderScreen();
-    expect(
-      await screen.findByText(/Could not load your conversations/i),
-    ).toBeInTheDocument();
+    expect(await screen.findByText(/Could not load your conversations/i)).toBeInTheDocument();
     mocked.listConversations.mockResolvedValueOnce([]);
     await userEvent.click(screen.getByRole("button", { name: "Try again" }));
     await waitFor(() =>

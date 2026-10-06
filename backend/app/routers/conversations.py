@@ -189,9 +189,7 @@ async def list_conversations(
         .order_by(Conversation.updated_at.desc())
         .all()
     )
-    return [
-        ConversationSummary(id=c.id, title=c.title, updated_at=c.updated_at) for c in rows
-    ]
+    return [ConversationSummary(id=c.id, title=c.title, updated_at=c.updated_at) for c in rows]
 
 
 @router.post("/conversations", response_model=ConversationCreateResponse)
@@ -321,9 +319,7 @@ async def post_message(
     history = _history_before(db, conversation.id, before=user_message.created_at)
 
     return StreamingResponse(
-        _stream_turn(
-            db, conversation, org_id, history, payload.content, request.is_disconnected
-        ),
+        _stream_turn(db, conversation, org_id, history, payload.content, request.is_disconnected),
         media_type="text/event-stream",
     )
 
@@ -372,8 +368,6 @@ async def regenerate_message(
         db.commit()
 
     return StreamingResponse(
-        _stream_turn(
-            db, conversation, org_id, history, user_turn.content, request.is_disconnected
-        ),
+        _stream_turn(db, conversation, org_id, history, user_turn.content, request.is_disconnected),
         media_type="text/event-stream",
     )
