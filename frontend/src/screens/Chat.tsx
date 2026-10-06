@@ -179,6 +179,7 @@ export default function Screen() {
   const triggerRef = React.useRef<HTMLElement | null>(null);
   const composerRef = React.useRef<HTMLTextAreaElement | null>(null);
   const streamControllerRef = React.useRef<AbortController | null>(null);
+  const pendingTitleRef = React.useRef<Set<string>>(new Set());
 
   const nextId = () => {
     idRef.current += 1;
@@ -189,7 +190,11 @@ export default function Screen() {
     setMessages((prev) => prev.map((m) => (m.id === id ? { ...m, ...patch } : m)));
   };
 
-  const filtered = conversations.filter((c) =>
+  const sortedConversations = [...conversations].sort(
+    (a, b) => new Date(b.updated_at).getTime() - new Date(a.updated_at).getTime(),
+  );
+
+  const filtered = sortedConversations.filter((c) =>
     (c.title ?? "Untitled conversation").toLowerCase().includes(search.trim().toLowerCase()),
   );
 
@@ -213,9 +218,20 @@ export default function Screen() {
           citations: m.citations ?? [],
         })),
       );
-    } catch {
+    } catch (err) {
+      const message = err instanceof Error ? err.message : "";
       setMessages([]);
-      setMessagesError("Could not load this conversation. Check your connection and try again.");
+      if (/\b404\b/.test(message)) {
+        // The conversation is gone or never belonged to this user. Do not
+        // describe why -- just drop it from the list and return to a usable
+        // new-chat view rather than leaking ownership details.
+        setMessagesError(null);
+        setConversations((prev) => prev.filter((c) => c.id !== id));
+        setActiveId(null);
+        setAnnounce("This conversation is no longer available.");
+      } else {
+        setMessagesError("Could not load this conversation. Check your connection and try again.");
+      }
     } finally {
       setMessagesLoading(false);
     }
@@ -277,6 +293,7 @@ export default function Screen() {
       setStreamingMsgId(assistantMsgId);
       updateMessage(assistantMsgId, { status: "streaming", content: "", citations: [] });
       let accumulated = "";
+      let hadError = false;
       try {
         await streamAssistantMessage(
           convId,
@@ -293,12 +310,25 @@ export default function Screen() {
                   (event.citations.length === 1 ? " source." : " sources."),
               );
             } else if (event.type === "error") {
+              hadError = true;
               updateMessage(assistantMsgId, { status: "error" });
               setAnnounce("The answer stream failed. " + event.message);
             }
           },
           controller.signal,
         );
+        if (!hadError && pendingTitleRef.current.has(convId)) {
+          // The first answer for this conversation completed. The server
+          // generates the title from the exchange, so refresh the list now
+          // to replace the placeholder with it rather than ever PATCHing a
+          // client-truncated title ourselves.
+          pendingTitleRef.current.delete(convId);
+          listConversations()
+            .then((list) => setConversations(list))
+            .catch(() => {
+              /* title refresh is best-effort; the placeholder stays */
+            });
+        }
       } catch (err) {
         if (err instanceof DOMException && err.name === "AbortError") {
           updateMessage(assistantMsgId, { status: "stopped" });
@@ -348,12 +378,9 @@ export default function Screen() {
         setDraft(q);
         return;
       }
-      const title = q.length > 44 ? q.slice(0, 44).trim() + "…" : q;
-      renameConversation(convId, title).catch(() => {
-        /* title is cosmetic; the conversation still exists */
-      });
+      pendingTitleRef.current.add(convId);
       setConversations((prev) => [
-        { id: convId as string, title, updated_at: new Date().toISOString() },
+        { id: convId as string, title: null, updated_at: new Date().toISOString() },
         ...prev,
       ]);
       setActiveId(convId);
@@ -447,6 +474,7 @@ export default function Screen() {
       if (activeId === convId) {
         setActiveId(null);
         setMessages([]);
+        setMessagesError(null);
         setSource(null);
       }
       setAnnounce("Conversation deleted.");
@@ -998,12 +1026,11 @@ export default function Screen() {
               className="truncate text-[1.35rem] font-semibold tracking-tight"
               style={{ color: "#231F1A", fontFamily: brand.fontHeading }}
             >
-              {active ? (active.title ?? "Untitled conversation") : "New chat"}
+              {activeId ? (active ? (active.title ?? "Untitled conversation") : "Untitled conversation") : "New chat"}
             </h1>
             <p className="mt-1 text-[13px]" style={{ color: "#6E675B" }}>
-              {active
-                ? formatDate(active.updated_at) +
-                  " · " +
+              {activeId
+                ? (active ? formatDate(active.updated_at) + " · " : "") +
                   messages.length +
                   " messages · answers drawn only from the shared library"
                 : "Answers are drawn only from documents uploaded to the shared library."}
@@ -1047,7 +1074,7 @@ export default function Screen() {
                 </Button>
               </div>
             </div>
-          ) : !active || messages.length === 0 ? (
+          ) : !activeId || messages.length === 0 ? (
             <div className="mx-auto max-w-[44rem] pt-10">
               <div className="rounded-lg border bg-white p-8" style={{ borderColor: BORDER }}>
                 <h3

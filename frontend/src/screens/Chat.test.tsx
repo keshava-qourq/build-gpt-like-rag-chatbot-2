@@ -155,7 +155,7 @@ describe("Chat screen", () => {
     await userEvent.type(textbox, "Hello there");
     await userEvent.click(screen.getByRole("button", { name: "Send" }));
 
-    await waitFor(() => expect(screen.getAllByText("Hello there").length).toBeGreaterThan(1));
+    await waitFor(() => expect(screen.getAllByText("Hello there").length).toBeGreaterThanOrEqual(1));
     expect(mocked.createConversation).toHaveBeenCalledTimes(1);
     expect(mocked.streamAssistantMessage).toHaveBeenCalledWith(
       "conv-new",
@@ -229,6 +229,49 @@ describe("Chat screen", () => {
     secondStream.emit({ type: "citations", citations: [] });
     secondStream.resolve();
     await screen.findByText("SLAs apply.");
+  });
+
+  it("shows a non-leaking error state on a 404 and returns to a usable new-chat view", async () => {
+    mocked.listConversations.mockResolvedValue([
+      { id: "conv-ghost", title: "Someone else's chat", updated_at: new Date().toISOString() },
+    ]);
+    mocked.getConversation.mockRejectedValueOnce(new Error("GET /conversations/conv-ghost failed: 404"));
+
+    renderScreen();
+
+    await waitFor(() => expect(screen.queryByText(/No conversations yet/i)).toBeInTheDocument());
+    expect(screen.queryByText("Someone else's chat")).toBeNull();
+    expect(screen.queryByText(/404/)).toBeNull();
+    expect(screen.queryByText(/Someone else/)).toBeNull();
+    expect(screen.getByLabelText("Ask a question of the uploaded documents")).toBeInTheDocument();
+  });
+
+  it("creates a conversation only on first send, never PATCHes a truncated title, and refreshes the list to pick up the server title", async () => {
+    mocked.listConversations.mockResolvedValueOnce([]);
+    mocked.createConversation.mockResolvedValue({ id: "conv-new" });
+    mocked.listConversations.mockResolvedValueOnce([
+      { id: "conv-new", title: "Server-generated title", updated_at: new Date().toISOString() },
+    ]);
+    const stream = deferredStream();
+
+    renderScreen();
+    await screen.findByText(/No conversations yet/i);
+    expect(mocked.createConversation).not.toHaveBeenCalled();
+
+    const textbox = screen.getByLabelText("Ask a question of the uploaded documents");
+    await userEvent.type(textbox, "Hello there");
+    await userEvent.click(screen.getByRole("button", { name: "Send" }));
+
+    await waitFor(() => expect(mocked.createConversation).toHaveBeenCalledTimes(1));
+    expect(mocked.renameConversation).not.toHaveBeenCalled();
+
+    stream.emit({ type: "token", token: "Hi." });
+    stream.emit({ type: "citations", citations: [] });
+    stream.resolve();
+
+    const sidebar = await screen.findByRole("complementary", { name: "Conversations" });
+    expect(mocked.renameConversation).not.toHaveBeenCalled();
+    await within(sidebar).findByText("Server-generated title");
   });
 
   it("renames and deletes conversations through the API instead of local state", async () => {
