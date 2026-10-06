@@ -16,10 +16,10 @@ from __future__ import annotations
 
 import os
 import uuid
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from typing import Annotated
 
-from fastapi import Depends, Header
+from fastapi import Depends, Header, HTTPException
 from jose import JWTError, jwt
 from passlib.context import CryptContext
 
@@ -45,7 +45,7 @@ def create_access_token(user_id: uuid.UUID, org_id: uuid.UUID, role: str) -> str
         "sub": str(user_id),
         "org_id": str(org_id),
         "role": role,
-        "exp": datetime.now(timezone.utc) + timedelta(minutes=JWT_EXPIRES_MINUTES),
+        "exp": datetime.now(UTC) + timedelta(minutes=JWT_EXPIRES_MINUTES),
     }
     return jwt.encode(payload, JWT_SECRET, algorithm=JWT_ALGORITHM)
 
@@ -72,3 +72,21 @@ def get_current_claims(
 
 
 CurrentClaims = Annotated[dict | None, Depends(get_current_claims)]
+
+
+def require_auth(claims: CurrentClaims) -> dict:
+    """Strict counterpart to `get_current_claims`: raises 401 when the
+    bearer token is missing, malformed, expired or otherwise invalid.
+
+    Routes that must actually require a session depend on this instead of
+    the permissive seam -- used as a FastAPI dependency (directly on a route
+    or via `include_router(..., dependencies=[Depends(require_auth)])`) so
+    every protected endpoint rejects an unauthenticated caller before its
+    handler runs.
+    """
+    if claims is None:
+        raise HTTPException(status_code=401, detail="Not authenticated")
+    return claims
+
+
+RequireAuth = Annotated[dict, Depends(require_auth)]

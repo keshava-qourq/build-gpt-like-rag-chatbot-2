@@ -7,13 +7,17 @@ OpenAPI document and passes its tests before a single handler is implemented.
 """
 
 import os
+import uuid
+from datetime import UTC, datetime
 
-from fastapi import FastAPI
+from fastapi import Depends, FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy import text
 
 from app import models  # noqa: F401 -- imported so the tables register before create_all
-from app.database import Base, engine
+from app.auth import require_auth
+from app.database import Base, SessionLocal, engine
+from app.models import Organization
 from app.routers import auth, conversations, documents, invitations, users
 from app.schemas import HealthResponse
 from app.storage import S3_BUCKET, get_s3_client
@@ -72,11 +76,35 @@ app.add_middleware(
 # startup. Replace this with Alembic before anything holds data worth keeping.
 Base.metadata.create_all(bind=engine)
 
+
+def _provision_organization() -> None:
+    """This is a single-tenant deployment: there is exactly one organisation,
+    named from config, and no endpoint ever accepts or returns a tenant
+    selector. Provisioning it here means a fresh database always has the one
+    row every org_id foreign key needs, without a separate setup step."""
+    org_name = os.getenv("ORG_NAME", "Default Organization")
+    org_id_raw = os.getenv("ORG_ID")
+
+    with SessionLocal() as session:
+        if session.query(Organization).first() is not None:
+            return
+        session.add(
+            Organization(
+                id=uuid.UUID(org_id_raw) if org_id_raw else uuid.uuid4(),
+                name=org_name,
+                created_at=datetime.now(UTC),
+            )
+        )
+        session.commit()
+
+
+_provision_organization()
+
 app.include_router(auth.router)
 app.include_router(invitations.router)
-app.include_router(users.router)
-app.include_router(documents.router)
-app.include_router(conversations.router)
+app.include_router(users.router, dependencies=[Depends(require_auth)])
+app.include_router(documents.router, dependencies=[Depends(require_auth)])
+app.include_router(conversations.router, dependencies=[Depends(require_auth)])
 
 
 @app.get("/health", response_model=HealthResponse)
