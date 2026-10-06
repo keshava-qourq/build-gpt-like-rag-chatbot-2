@@ -13,10 +13,22 @@
 // time.
 export const API_BASE_URL: string = import.meta.env.VITE_API_BASE_URL ?? "http://localhost:8000";
 
+/**
+ * Every request the frontend makes carries whatever bearer token sign-in
+ * stored, if any. Reading it lazily (rather than caching it in a module
+ * variable) means a sign-in or sign-out in another tab is picked up on the
+ * next request without a reload.
+ */
+function authHeaders(): Record<string, string> {
+  if (typeof localStorage === "undefined") return {};
+  const token = localStorage.getItem("auth_token");
+  return token ? { Authorization: `Bearer ${token}` } : {};
+}
+
 export async function apiFetch<T>(path: string, init?: RequestInit): Promise<T> {
   const response = await fetch(`${API_BASE_URL}${path}`, {
     ...init,
-    headers: { "Content-Type": "application/json", ...(init?.headers ?? {}) },
+    headers: { "Content-Type": "application/json", ...authHeaders(), ...(init?.headers ?? {}) },
   });
   if (!response.ok) {
     throw new Error(`${init?.method ?? "GET"} ${path} failed: ${response.status}`);
@@ -32,6 +44,7 @@ export async function apiFetch<T>(path: string, init?: RequestInit): Promise<T> 
 export async function apiUpload<T>(path: string, formData: FormData): Promise<T> {
   const response = await fetch(`${API_BASE_URL}${path}`, {
     method: "POST",
+    headers: { ...authHeaders() },
     body: formData,
   });
   if (!response.ok) {
@@ -90,4 +103,150 @@ export async function uploadDocuments(
   files.forEach((file) => formData.append("files", file));
   (replaceDocumentIds ?? []).forEach((id) => formData.append("replace_document_ids", id));
   return apiUpload<UploadResultItem[]>("/documents", formData);
+}
+
+// ---- Conversations / chat ----
+
+export interface ConversationSummaryDTO {
+  id: string;
+  title: string | null;
+  updated_at: string;
+}
+
+export interface ConversationCreateResult {
+  id: string;
+}
+
+export interface CitationItem {
+  marker: number;
+  document_id: string | null;
+  filename: string;
+  format?: string;
+  location_label: string | null;
+  snapshot_text: string;
+  deleted?: boolean;
+}
+
+export interface ConversationMessageDTO {
+  role: "user" | "assistant";
+  content: string;
+  citations: CitationItem[];
+}
+
+export interface ConversationDetailDTO {
+  id: string;
+  title: string | null;
+  messages: ConversationMessageDTO[];
+}
+
+export async function listConversations(): Promise<ConversationSummaryDTO[]> {
+  return apiFetch<ConversationSummaryDTO[]>("/conversations");
+}
+
+export async function createConversation(): Promise<ConversationCreateResult> {
+  return apiFetch<ConversationCreateResult>("/conversations", { method: "POST" });
+}
+
+export async function getConversation(id: string): Promise<ConversationDetailDTO> {
+  return apiFetch<ConversationDetailDTO>(`/conversations/${id}`);
+}
+
+export async function renameConversation(
+  id: string,
+  title: string,
+): Promise<{ id: string; title: string }> {
+  return apiFetch<{ id: string; title: string }>(`/conversations/${id}`, {
+    method: "PATCH",
+    body: JSON.stringify({ title }),
+  });
+}
+
+export async function deleteConversation(id: string): Promise<void> {
+  return apiFetch<void>(`/conversations/${id}`, { method: "DELETE" });
+}
+
+export type ChatStreamEvent =
+  | { type: "token"; token: string }
+  | { type: "citations"; citations: CitationItem[] }
+  | { type: "error"; message: string };
+
+/**
+ * Streams an assistant answer with `fetch` + `ReadableStream`, not
+ * `EventSource` -- EventSource cannot send a POST body or an Authorization
+ * header, both of which this endpoint requires. `signal` is wired to an
+ * `AbortController` so Stop can cut the connection from the caller.
+ */
+export async function streamAssistantMessage(
+  conversationId: string,
+  content: string,
+  onEvent: (event: ChatStreamEvent) => void,
+  signal: AbortSignal,
+): Promise<void> {
+  const response = await fetch(`${API_BASE_URL}/conversations/${conversationId}/messages`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", ...authHeaders() },
+    body: JSON.stringify({ content }),
+    signal,
+  });
+
+  if (!response.ok || !response.body) {
+    onEvent({ type: "error", message: `The request failed with status ${response.status}.` });
+    return;
+  }
+
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = "";
+
+  const handleRawEvent = (raw: string) => {
+    let eventName = "message";
+    let data = "";
+    for (const line of raw.split("\n")) {
+      if (line.startsWith("event:")) eventName = line.slice(6).trim();
+      else if (line.startsWith("data:")) data += line.slice(5).trim();
+    }
+    if (!data) return;
+    if (eventName === "token") {
+      try {
+        const parsed = JSON.parse(data);
+        const token = typeof parsed === "string" ? parsed : (parsed.token ?? "");
+        onEvent({ type: "token", token });
+      } catch {
+        onEvent({ type: "token", token: data });
+      }
+      return;
+    }
+    if (eventName === "citations") {
+      try {
+        const parsed = JSON.parse(data) as CitationItem[];
+        onEvent({ type: "citations", citations: Array.isArray(parsed) ? parsed : [] });
+      } catch {
+        onEvent({ type: "error", message: "The source list could not be read." });
+      }
+      return;
+    }
+    if (eventName === "error") {
+      let message = "The answer stream was interrupted.";
+      try {
+        const parsed = JSON.parse(data);
+        message = parsed.message ?? message;
+      } catch {
+        if (data) message = data;
+      }
+      onEvent({ type: "error", message });
+    }
+  };
+
+  while (true) {
+    const { value, done } = await reader.read();
+    if (done) break;
+    buffer += decoder.decode(value, { stream: true });
+    let idx = buffer.indexOf("\n\n");
+    while (idx !== -1) {
+      handleRawEvent(buffer.slice(0, idx));
+      buffer = buffer.slice(idx + 2);
+      idx = buffer.indexOf("\n\n");
+    }
+  }
+  if (buffer.trim()) handleRawEvent(buffer);
 }
