@@ -93,7 +93,6 @@ def get_llm_provider() -> LLMProvider:
         provider_cls = PROVIDER_REGISTRY[provider_name]
     except KeyError as exc:
         raise ValueError(
-            f"Unknown LLM_PROVIDER '{provider_name}'; known providers: "
-            f"{sorted(PROVIDER_REGISTRY)}"
+            f"Unknown LLM_PROVIDER '{provider_name}'; known providers: {sorted(PROVIDER_REGISTRY)}"
         ) from exc
     return provider_cls()
