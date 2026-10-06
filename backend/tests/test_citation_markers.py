@@ -278,9 +278,7 @@ def test_two_claims_on_the_same_chunk_share_one_marker_and_one_source(
 # ---------------------------------------------------------------------------
 
 
-def test_refusal_reply_carries_no_citation_markers(
-    user_and_headers, monkeypatch
-) -> None:
+def test_refusal_reply_carries_no_citation_markers(user_and_headers, monkeypatch) -> None:
     _, headers = user_and_headers
     conv_id = client.post("/conversations", headers=headers).json()["id"]
 

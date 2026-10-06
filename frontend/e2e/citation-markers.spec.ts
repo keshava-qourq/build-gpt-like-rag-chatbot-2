@@ -38,23 +38,11 @@ import { test } from "@playwright/test";
  */
 
 test.describe("US-028: numbered citation markers inline in the answer", () => {
-  test.skip(
-    "AC-103: a real grounded answer carries consecutively numbered markers like [1] once the trailing citations event arrives -- requires a live LLM/embeddings provider, unavailable in this environment",
-    async () => {},
-  );
+  test.skip("AC-103: a real grounded answer carries consecutively numbered markers like [1] once the trailing citations event arrives -- requires a live LLM/embeddings provider, unavailable in this environment", async () => {});
 
-  test.skip(
-    "AC-104: two claims drawn from the same uploaded chunk both display the same marker and open the same source -- requires a live LLM/embeddings provider, unavailable in this environment",
-    async () => {},
-  );
+  test.skip("AC-104: two claims drawn from the same uploaded chunk both display the same marker and open the same source -- requires a live LLM/embeddings provider, unavailable in this environment", async () => {});
 
-  test.skip(
-    "AC-105: a question with no match in the uploaded library renders the fixed refusal with no citation markers -- requires a live embeddings provider to embed the question even on the refusal path, unavailable in this environment",
-    async () => {},
-  );
+  test.skip("AC-105: a question with no match in the uploaded library renders the fixed refusal with no citation markers -- requires a live embeddings provider to embed the question even on the refusal path, unavailable in this environment", async () => {});
 
-  test.skip(
-    "AC-106: a marker the model emits with no corresponding retrieved chunk is not rendered as a clickable citation, and the rest of the answer still displays -- requires a live LLM/embeddings provider, unavailable in this environment",
-    async () => {},
-  );
+  test.skip("AC-106: a marker the model emits with no corresponding retrieved chunk is not rendered as a clickable citation, and the rest of the answer still displays -- requires a live LLM/embeddings provider, unavailable in this environment", async () => {});
 });
