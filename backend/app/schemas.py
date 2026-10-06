@@ -43,6 +43,8 @@ class InvitationOut(BaseModel):
     email: str
     role: str
     expires_at: datetime
+    accept_url: str
+    token: str
 
 
 class InvitationAcceptRequest(BaseModel):
