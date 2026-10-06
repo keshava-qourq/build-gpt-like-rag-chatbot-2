@@ -24,7 +24,10 @@ const FORMAT_LABELS: Record<string, string> = {
 
 type StatusKey = "queued" | "processing" | "ready" | "failed";
 
-const STATUS_META: Record<StatusKey, { label: string; fg: string; bg: string; icon: string; hint: string }> = {
+const STATUS_META: Record<
+  StatusKey,
+  { label: string; fg: string; bg: string; icon: string; hint: string }
+> = {
   queued: {
     label: "Queued",
     fg: "#5A544A",
@@ -597,7 +600,10 @@ export default function Screen() {
               >
                 Could not load the library
               </h3>
-              <p className="mx-auto mt-2 max-w-md text-sm leading-relaxed" style={{ color: brand.neutralColor }}>
+              <p
+                className="mx-auto mt-2 max-w-md text-sm leading-relaxed"
+                style={{ color: brand.neutralColor }}
+              >
                 {loadError}
               </p>
               <Button
@@ -895,7 +901,9 @@ export default function Screen() {
                                   style={{ color: brand.neutralColor }}
                                 >
                                   {fmtDate(doc.created_at)}
-                                  {doc.supersedes_document_id ? " · supersedes an earlier version" : ""}
+                                  {doc.supersedes_document_id
+                                    ? " · supersedes an earlier version"
+                                    : ""}
                                   <span className="lg:hidden"> · {doc.uploader}</span>
                                 </span>
                                 {doc.status === "failed" && doc.failure_reason ? (

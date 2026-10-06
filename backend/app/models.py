@@ -200,9 +200,7 @@ if engine.dialect.name == "sqlite":
         cursor.execute("PRAGMA table_info(documents)")
         columns = {row[1] for row in cursor.fetchall()}
         if columns and "supersedes_document_id" not in columns:
-            cursor.execute(
-                "ALTER TABLE documents ADD COLUMN supersedes_document_id VARCHAR(32)"
-            )
+            cursor.execute("ALTER TABLE documents ADD COLUMN supersedes_document_id VARCHAR(32)")
             dbapi_connection.commit()
         cursor.close()
 
