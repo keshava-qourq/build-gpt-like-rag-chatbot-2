@@ -25,8 +25,11 @@ class LLMProvider(ABC):
         """Yield answer tokens as they are generated, grounded in `context`."""
 
     @abstractmethod
-    async def generate_title(self, *, first_message: str) -> str:
-        """Generate a short conversation title from its first message."""
+    async def generate_title(self, *, first_message: str, answer: str | None = None) -> str:
+        """Generate a short conversation title from the first question and,
+        once available, its completed answer. `answer` is optional and
+        defaults to `None` so existing callers that only have the question
+        keep working unchanged."""
 
     @abstractmethod
     async def rewrite_query(self, *, history: list[dict[str, str]], question: str) -> str:
@@ -69,8 +72,11 @@ class OpenAILLMProvider(LLMProvider):
             if delta:
                 yield delta
 
-    async def generate_title(self, *, first_message: str) -> str:
+    async def generate_title(self, *, first_message: str, answer: str | None = None) -> str:
         client = self._get_client()
+        user_content = first_message
+        if answer:
+            user_content = f"Question: {first_message}\n\nAnswer: {answer}"
         response = await client.chat.completions.create(
             model=self.model,
             messages=[
@@ -78,11 +84,12 @@ class OpenAILLMProvider(LLMProvider):
                     "role": "system",
                     "content": (
                         "Generate a short, concise title (at most 6 words) for a "
-                        "conversation based on its first message. Respond with only "
-                        "the title, no quotation marks."
+                        "conversation based on its first question and, if supplied, "
+                        "the answer it received. Respond with only the title, no "
+                        "quotation marks."
                     ),
                 },
-                {"role": "user", "content": first_message},
+                {"role": "user", "content": user_content},
             ],
         )
         return response.choices[0].message.content.strip()

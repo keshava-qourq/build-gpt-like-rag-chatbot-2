@@ -58,7 +58,7 @@ class _FakeStreamingLLMProvider:
 
         return _gen()
 
-    async def generate_title(self, *, first_message):
+    async def generate_title(self, *, first_message, answer=None):
         return "Generated Title"
 
 
@@ -66,8 +66,44 @@ class _RaisingLLMProvider:
     def stream_answer(self, *, system, messages, context):
         raise RuntimeError("provider exploded")
 
-    async def generate_title(self, *, first_message):
+    async def generate_title(self, *, first_message, answer=None):
         return "unused"
+
+
+class _RaisingTitleLLMProvider:
+    """Streams a normal answer but raises on title generation, to prove a
+    title-generation failure never breaks the message stream (AC-086)."""
+
+    def __init__(self, tokens):
+        self._tokens = tokens
+
+    def stream_answer(self, *, system, messages, context):
+        async def _gen():
+            for token in self._tokens:
+                yield token
+
+        return _gen()
+
+    async def generate_title(self, *, first_message, answer=None):
+        raise RuntimeError("title provider exploded")
+
+
+class _EmptyTitleLLMProvider:
+    """Streams a normal answer but returns an empty title, exercising the
+    other half of AC-086's fallback."""
+
+    def __init__(self, tokens):
+        self._tokens = tokens
+
+    def stream_answer(self, *, system, messages, context):
+        async def _gen():
+            for token in self._tokens:
+                yield token
+
+        return _gen()
+
+    async def generate_title(self, *, first_message, answer=None):
+        return "   "
 
 
 @pytest.fixture(autouse=True)
@@ -213,6 +249,87 @@ def test_rename_and_delete_persist(user_and_headers) -> None:
     assert missing.status_code == 404
 
 
+def test_rename_owned_by_another_user_is_404_even_for_admin_and_does_not_mutate(
+    db_session: Session, org: Organization
+) -> None:
+    _, headers_owner = _make_user_and_headers(db_session, org)
+    create = client.post("/conversations", headers=headers_owner)
+    conv_id = create.json()["id"]
+
+    _, headers_admin = _make_user_and_headers(db_session, org, role="admin")
+    response = client.patch(
+        f"/conversations/{conv_id}", headers=headers_admin, json={"title": "Hijacked"}
+    )
+    assert response.status_code == 404
+
+    conversation = db_session.query(Conversation).filter(Conversation.id == conv_id).one()
+    assert conversation.title is None
+
+
+def test_delete_owned_by_another_user_is_404_and_does_not_delete(
+    db_session: Session, org: Organization
+) -> None:
+    _, headers_owner = _make_user_and_headers(db_session, org)
+    create = client.post("/conversations", headers=headers_owner)
+    conv_id = create.json()["id"]
+
+    _, headers_admin = _make_user_and_headers(db_session, org, role="admin")
+    response = client.delete(f"/conversations/{conv_id}", headers=headers_admin)
+    assert response.status_code == 404
+
+    still_there = client.get(f"/conversations/{conv_id}", headers=headers_owner)
+    assert still_there.status_code == 200
+
+
+def test_delete_conversation_removes_messages_and_citations_but_not_documents(
+    db_session: Session, user_and_headers, monkeypatch
+) -> None:
+    user, headers = user_and_headers
+    create = client.post("/conversations", headers=headers)
+    conv_id = uuid.UUID(create.json()["id"])
+
+    document = Document(
+        id=uuid.uuid4(),
+        org_id=user.org_id,
+        uploader_id=user.id,
+        filename="del.txt",
+        format="txt",
+        size_bytes=10,
+        s3_key="key-del",
+        status="ready",
+        created_at=datetime.now(UTC),
+    )
+    db_session.add(document)
+    db_session.commit()
+    db_session.add(
+        Chunk(
+            id=uuid.uuid4(),
+            org_id=user.org_id,
+            document_id=document.id,
+            ordinal=0,
+            text="Some ready content.",
+            embedding=QUERY_VECTOR,
+            embedding_model="fake-model",
+            embedding_dim=3,
+        )
+    )
+    db_session.commit()
+
+    fake_provider = _FakeStreamingLLMProvider(["answer [1]."])
+    monkeypatch.setattr(generation_module, "get_llm_provider", lambda: fake_provider)
+    client.post(
+        f"/conversations/{conv_id}/messages", headers=headers, json={"content": "question?"}
+    )
+
+    assert db_session.query(Message).filter(Message.conversation_id == conv_id).count() == 2
+
+    delete = client.delete(f"/conversations/{conv_id}", headers=headers)
+    assert delete.status_code == 200
+
+    assert db_session.query(Message).filter(Message.conversation_id == conv_id).count() == 0
+    assert db_session.query(Document).filter(Document.id == document.id).one_or_none() is not None
+
+
 # ---------------------------------------------------------------------------
 # AC-069, AC-070: persistence before streaming, tokens, trailing citations.
 # ---------------------------------------------------------------------------
@@ -294,6 +411,90 @@ def test_post_message_persists_user_turn_streams_tokens_and_citations(
     assert len(assistant_message.citations) == 1
 
     conversation = db_session.query(Conversation).filter(Conversation.id == conv_id).one()
+    assert conversation.title == "Generated Title"
+
+
+# ---------------------------------------------------------------------------
+# AC-086: title-generation failure or empty result falls back to a truncated
+# form of the first question, and the message stream is unaffected.
+# ---------------------------------------------------------------------------
+
+
+def test_title_generation_failure_falls_back_to_truncated_question(
+    db_session: Session, user_and_headers, monkeypatch
+) -> None:
+    user, headers = user_and_headers
+    create = client.post("/conversations", headers=headers)
+    conv_id = uuid.UUID(create.json()["id"])
+
+    monkeypatch.setattr(
+        generation_module, "get_llm_provider", lambda: _RaisingTitleLLMProvider(["answer."])
+    )
+
+    long_question = "What is " + ("x" * 100) + "?"
+    response = client.post(
+        f"/conversations/{conv_id}/messages", headers=headers, json={"content": long_question}
+    )
+    assert response.status_code == 200
+    events = _parse_sse(response.text)
+    assert all(e[0] != "error" for e in events)
+
+    conversation = db_session.query(Conversation).filter(Conversation.id == conv_id).one()
+    assert conversation.title is not None
+    assert conversation.title == conversations_module._fallback_title(long_question)
+    assert len(conversation.title) <= 60
+
+
+def test_title_generation_empty_result_falls_back_to_truncated_question(
+    db_session: Session, user_and_headers, monkeypatch
+) -> None:
+    user, headers = user_and_headers
+    create = client.post("/conversations", headers=headers)
+    conv_id = uuid.UUID(create.json()["id"])
+
+    monkeypatch.setattr(
+        generation_module, "get_llm_provider", lambda: _EmptyTitleLLMProvider(["answer."])
+    )
+
+    response = client.post(
+        f"/conversations/{conv_id}/messages", headers=headers, json={"content": "short question?"}
+    )
+    assert response.status_code == 200
+
+    conversation = db_session.query(Conversation).filter(Conversation.id == conv_id).one()
+    assert conversation.title == "short question?"
+
+
+def test_title_not_regenerated_on_second_turn(
+    db_session: Session, user_and_headers, monkeypatch
+) -> None:
+    user, headers = user_and_headers
+    create = client.post("/conversations", headers=headers)
+    conv_id = uuid.UUID(create.json()["id"])
+
+    first_provider = _FakeStreamingLLMProvider(["first answer."])
+    monkeypatch.setattr(generation_module, "get_llm_provider", lambda: first_provider)
+    client.post(
+        f"/conversations/{conv_id}/messages", headers=headers, json={"content": "first question?"}
+    )
+
+    conversation = db_session.query(Conversation).filter(Conversation.id == conv_id).one()
+    assert conversation.title == "Generated Title"
+
+    class _DifferentTitleProvider(_FakeStreamingLLMProvider):
+        async def generate_title(self, *, first_message, answer=None):
+            return "Should Never Be Used"
+
+    monkeypatch.setattr(
+        generation_module, "get_llm_provider", lambda: _DifferentTitleProvider(["second answer."])
+    )
+    client.post(
+        f"/conversations/{conv_id}/messages",
+        headers=headers,
+        json={"content": "second question?"},
+    )
+
+    db_session.refresh(conversation)
     assert conversation.title == "Generated Title"
 
 

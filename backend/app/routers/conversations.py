@@ -99,12 +99,42 @@ def _citation_event_payload(db: Session, citations: list[ResolvedCitation]) -> l
     ]
 
 
-def _persist_assistant_turn(
+_FALLBACK_TITLE_MAX_LENGTH = 60
+
+
+def _fallback_title(question: str) -> str:
+    """Truncated form of the first question, used whenever title generation
+    raises or returns empty (AC-086) -- the conversation must never be left
+    without a usable title just because the provider failed."""
+    trimmed = " ".join(question.split())
+    if len(trimmed) <= _FALLBACK_TITLE_MAX_LENGTH:
+        return trimmed
+    return trimmed[: _FALLBACK_TITLE_MAX_LENGTH - 3].rstrip() + "..."
+
+
+async def _generate_title(*, question: str, answer: str) -> str:
+    """Best-effort title from the first question and its completed answer
+    (AC-084). A provider failure or an empty result never breaks the turn:
+    a truncated form of the question is persisted instead (AC-086)."""
+    title: str | None = None
+    try:
+        provider = get_llm_provider()
+        title = await provider.generate_title(first_message=question, answer=answer or None)
+    except Exception:  # noqa: BLE001 -- title generation is best-effort
+        title = None
+    title = (title or "").strip()
+    return title or _fallback_title(question)
+
+
+async def _persist_assistant_turn(
     db: Session,
     conversation: Conversation,
     content: str,
     status: str,
     citations: list[ResolvedCitation],
+    *,
+    question: str | None = None,
+    is_first_message: bool = False,
 ) -> None:
     now = datetime.now(UTC)
     message = Message(
@@ -132,6 +162,12 @@ def _persist_assistant_turn(
                 )
             )
 
+    # AC-084/AC-085: generated once, from the first exchange, after the
+    # assistant turn it is titling has been built -- never regenerated on a
+    # later turn; only PATCH /conversations/{id} changes it after this.
+    if is_first_message and conversation.title is None and question is not None:
+        conversation.title = await _generate_title(question=question, answer=content)
+
     conversation.updated_at = now
     db.commit()
 
@@ -143,6 +179,8 @@ async def _stream_turn(
     history: list[dict[str, str]],
     question: str,
     is_disconnected: Callable[[], Awaitable[bool]],
+    *,
+    is_first_message: bool = False,
 ) -> AsyncIterator[bytes]:
     text_parts: list[str] = []
     citations: list[ResolvedCitation] = []
@@ -174,7 +212,15 @@ async def _stream_turn(
         reason = str(exc) or "Generation failed"
         yield _sse("error", {"reason": reason})
     finally:
-        _persist_assistant_turn(db, conversation, "".join(text_parts), status, citations)
+        await _persist_assistant_turn(
+            db,
+            conversation,
+            "".join(text_parts),
+            status,
+            citations,
+            question=question,
+            is_first_message=is_first_message,
+        )
 
 
 @router.get("/conversations", response_model=list[ConversationSummary])
@@ -304,22 +350,18 @@ async def post_message(
     db.commit()
     db.refresh(user_message)
 
-    if is_first_message and conversation.title is None:
-        # Titles come from LLMProvider.generate_title on the first message
-        # of a conversation; a provider failure here must never break the
-        # message itself, so it is swallowed and the title stays None.
-        try:
-            provider = get_llm_provider()
-            title = await provider.generate_title(first_message=payload.content)
-            conversation.title = title
-            db.commit()
-        except Exception:  # noqa: BLE001 -- title generation is best-effort
-            db.rollback()
-
     history = _history_before(db, conversation.id, before=user_message.created_at)
 
     return StreamingResponse(
-        _stream_turn(db, conversation, org_id, history, payload.content, request.is_disconnected),
+        _stream_turn(
+            db,
+            conversation,
+            org_id,
+            history,
+            payload.content,
+            request.is_disconnected,
+            is_first_message=is_first_message,
+        ),
         media_type="text/event-stream",
     )
 
