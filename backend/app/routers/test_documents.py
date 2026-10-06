@@ -424,8 +424,9 @@ def test_citations_survive_deletion_with_nulled_references(
 
     org = db_session.query(Organization).first()
     user_id = uuid.UUID(
-        __import__("app.auth", fromlist=["decode_access_token"])
-        .decode_access_token(auth_header["Authorization"].split(" ", 1)[1])["sub"]
+        __import__("app.auth", fromlist=["decode_access_token"]).decode_access_token(
+            auth_header["Authorization"].split(" ", 1)[1]
+        )["sub"]
     )
 
     chunk = Chunk(org_id=org.id, document_id=doc_id, ordinal=0, text="hello")
