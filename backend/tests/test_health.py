@@ -13,12 +13,17 @@ from app.main import app
 client = TestClient(app)
 
 
-def test_health_reports_ok() -> None:
-    """A failure here means the application does not import or does not start."""
+def test_health_reports_reachability() -> None:
+    """A failure here means the application does not import or does not start.
+
+    The values are "ok" or "error" depending on whether a real database and
+    object store are reachable from wherever this runs, so only the shape --
+    not a specific status -- is asserted.
+    """
     response = client.get("/health")
 
     assert response.status_code == 200
-    assert response.json() == {"status": "ok"}
+    assert set(response.json().keys()) == {"db", "s3"}
 
 
 def test_the_openapi_document_builds() -> None:

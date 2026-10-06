@@ -10,7 +10,7 @@ the real thing when it exists; nothing else has to change.
 import os
 from collections.abc import Iterator
 
-from sqlalchemy import create_engine
+from sqlalchemy import create_engine, event
 from sqlalchemy.orm import DeclarativeBase, Session, sessionmaker
 
 DATABASE_URL = os.getenv("DATABASE_URL", "sqlite:///./app.db")
@@ -21,6 +21,18 @@ _connect_args = {"check_same_thread": False} if DATABASE_URL.startswith("sqlite"
 
 engine = create_engine(DATABASE_URL, connect_args=_connect_args, future=True)
 SessionLocal = sessionmaker(bind=engine, autoflush=False, expire_on_commit=False)
+
+
+if engine.dialect.name == "postgresql":
+    # The `chunks.embedding` column (see app/models.py) needs the pgvector
+    # extension. Creating it on first connect means pointing DATABASE_URL at a
+    # plain Postgres 16 instance is enough -- nothing manual to run first.
+    @event.listens_for(engine, "connect")
+    def _ensure_pgvector_extension(dbapi_connection, _connection_record) -> None:
+        cursor = dbapi_connection.cursor()
+        cursor.execute("CREATE EXTENSION IF NOT EXISTS vector")
+        cursor.close()
+        dbapi_connection.commit()
 
 
 class Base(DeclarativeBase):

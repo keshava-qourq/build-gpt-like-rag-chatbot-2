@@ -4,6 +4,35 @@ sqlalchemy==2.0.35
 pydantic==2.9.2
 psycopg[binary]==3.2.3
 
+# db: pgvector column type / index support for the chunks table. Falls back to
+# a plain text column under the local SQLite engine (see app/models.py), so a
+# real Postgres is only required once DATABASE_URL points at one.
+pgvector==0.3.6
+
+# api: JWT auth and password hashing, named by the architecture.
+python-jose[cryptography]==3.3.0
+passlib[argon2]==1.7.4
+
+# s3: original-file storage. Same client talks to AWS S3 in prod and to the
+# local MinIO instance when S3_ENDPOINT_URL is set.
+boto3==1.35.36
+
+# api: POST /documents takes multipart file uploads; FastAPI's Form/UploadFile
+# support needs this at import time, not just at request time.
+python-multipart==0.0.12
+
+# queue: durable ingestion handoff. Redis locally, SQS in prod via Celery.
+celery==5.4.0
+redis==5.1.1
+
+# worker: per-format extraction named by the architecture. TXT/MD/CSV parse
+# with the standard library, so only PDF and DOCX need a library each.
+PyMuPDF==1.24.11
+python-docx==1.1.2
+
+# llm / embeddings: default provider behind the adapters in app/providers/.
+openai==1.51.2
+
 # Checks. The platform installs and runs this file before it reports that the
 # generated tests pass, so the test dependencies belong here rather than in a
 # second file nobody installs. httpx is what fastapi.testclient runs on.

@@ -11,6 +11,9 @@ describe("App", () => {
         <App />
       </MemoryRouter>,
     );
-    expect(screen.getByText("Sign in")).toBeInTheDocument();
+    // The sidebar nav link and the sign-in screen's own heading both read
+    // "Sign in", so this asserts at least one rather than picking a single
+    // (fragile) match.
+    expect(screen.getAllByText("Sign in").length).toBeGreaterThan(0);
   });
 });

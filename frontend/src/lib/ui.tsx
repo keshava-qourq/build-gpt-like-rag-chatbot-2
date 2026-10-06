@@ -35,11 +35,17 @@ export function Button({
   size = "md",
   className,
   style,
+  ref,
   ...props
-}: React.ButtonHTMLAttributes<HTMLButtonElement> & { variant?: string; size?: string }) {
+}: React.ButtonHTMLAttributes<HTMLButtonElement> & {
+  variant?: string;
+  size?: string;
+  ref?: React.Ref<HTMLButtonElement>;
+}) {
   const branded = variant === "primary" ? { backgroundColor: "var(--brand-primary)" } : undefined;
   return (
     <button
+      ref={ref}
       {...props}
       className={cx(
         "inline-flex items-center justify-center gap-2 rounded-[var(--brand-radius)] font-medium",
@@ -103,15 +109,20 @@ const FIELD =
   "placeholder:text-slate-400 focus:border-[var(--brand-primary)] focus:outline-none " +
   "focus:ring-1 focus:ring-[var(--brand-primary)]";
 
-export function Input({ className, ...props }: React.InputHTMLAttributes<HTMLInputElement>) {
-  return <input {...props} className={cx(FIELD, "h-9", className)} />;
+export function Input({
+  className,
+  ref,
+  ...props
+}: React.InputHTMLAttributes<HTMLInputElement> & { ref?: React.Ref<HTMLInputElement> }) {
+  return <input ref={ref} {...props} className={cx(FIELD, "h-9", className)} />;
 }
 
 export function Textarea({
   className,
+  ref,
   ...props
-}: React.TextareaHTMLAttributes<HTMLTextAreaElement>) {
-  return <textarea {...props} className={cx(FIELD, "min-h-[80px]", className)} />;
+}: React.TextareaHTMLAttributes<HTMLTextAreaElement> & { ref?: React.Ref<HTMLTextAreaElement> }) {
+  return <textarea ref={ref} {...props} className={cx(FIELD, "min-h-[80px]", className)} />;
 }
 
 export function Label({ className, ...props }: React.LabelHTMLAttributes<HTMLLabelElement>) {
@@ -122,12 +133,14 @@ export function Select({
   options = [],
   className,
   children,
+  ref,
   ...props
 }: React.SelectHTMLAttributes<HTMLSelectElement> & {
   options?: Array<{ value: string; label: string }>;
+  ref?: React.Ref<HTMLSelectElement>;
 }) {
   return (
-    <select {...props} className={cx(FIELD, "h-9", className)}>
+    <select ref={ref} {...props} className={cx(FIELD, "h-9", className)}>
       {children ??
         options.map((option) => (
           <option key={option.value} value={option.value}>
@@ -138,9 +151,14 @@ export function Select({
   );
 }
 
-export function Checkbox({ className, ...props }: React.InputHTMLAttributes<HTMLInputElement>) {
+export function Checkbox({
+  className,
+  ref,
+  ...props
+}: React.InputHTMLAttributes<HTMLInputElement> & { ref?: React.Ref<HTMLInputElement> }) {
   return (
     <input
+      ref={ref}
       {...props}
       type="checkbox"
       className={cx("h-4 w-4 rounded border-slate-300 accent-[var(--brand-primary)]", className)}

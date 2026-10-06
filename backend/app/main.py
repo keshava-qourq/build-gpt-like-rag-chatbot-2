@@ -10,9 +10,13 @@ import os
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from sqlalchemy import text
 
 from app import models  # noqa: F401 -- imported so the tables register before create_all
 from app.database import Base, engine
+from app.routers import auth, conversations, documents, invitations, users
+from app.schemas import HealthResponse
+from app.storage import S3_BUCKET, get_s3_client
 
 app = FastAPI(
     title="# Build GPT-Like RAG Chatbot (2)",
@@ -38,8 +42,31 @@ app.add_middleware(
 # startup. Replace this with Alembic before anything holds data worth keeping.
 Base.metadata.create_all(bind=engine)
 
+app.include_router(auth.router)
+app.include_router(invitations.router)
+app.include_router(users.router)
+app.include_router(documents.router)
+app.include_router(conversations.router)
 
-@app.get("/health")
-async def health() -> dict[str, str]:
-    """Liveness probe, and the only route here that is not a stub."""
-    return {"status": "ok"}
+
+@app.get("/health", response_model=HealthResponse)
+async def health() -> HealthResponse:
+    """Reachability of the database and object storage, per the api_spec.
+
+    Neither failure raises: a dependency being down is exactly what this
+    endpoint exists to report, not a reason to 500.
+    """
+    db_status = "ok"
+    try:
+        with engine.connect() as connection:
+            connection.execute(text("SELECT 1"))
+    except Exception:
+        db_status = "error"
+
+    s3_status = "ok"
+    try:
+        get_s3_client().head_bucket(Bucket=S3_BUCKET)
+    except Exception:
+        s3_status = "error"
+
+    return HealthResponse(db=db_status, s3=s3_status)
