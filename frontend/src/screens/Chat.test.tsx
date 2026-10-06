@@ -550,7 +550,9 @@ describe("Chat screen", () => {
       renderScreen();
       await screen.findByText("That works.");
 
-      const code = screen.getByText((_, el) => el?.tagName === "CODE" && el.textContent!.includes('print("hi")'));
+      const code = screen.getByText(
+        (_, el) => el?.tagName === "CODE" && el.textContent!.includes('print("hi")'),
+      );
       expect(code.closest("pre")).not.toBeNull();
 
       const copyButtons = screen.getAllByRole("button", { name: /Copy code/i });
@@ -600,7 +602,8 @@ describe("Chat screen", () => {
           {
             id: "msg-2",
             role: "assistant",
-            content: '<img src=x onerror="window.__pwned=true" /> <script>window.__pwned=true</script>',
+            content:
+              '<img src=x onerror="window.__pwned=true" /> <script>window.__pwned=true</script>',
             citations: [],
           },
         ],
@@ -620,7 +623,11 @@ describe("Chat screen", () => {
       mocked.listConversations.mockResolvedValue([
         { id: "conv-1", title: "Retention periods", updated_at: new Date().toISOString() },
       ]);
-      mocked.getConversation.mockResolvedValue({ id: "conv-1", title: "Retention periods", messages: [] });
+      mocked.getConversation.mockResolvedValue({
+        id: "conv-1",
+        title: "Retention periods",
+        messages: [],
+      });
 
       renderScreen();
       await screen.findByRole("button", { name: "Open conversations list" });
@@ -633,7 +640,9 @@ describe("Chat screen", () => {
       await waitFor(() => expect(dialog).toHaveFocus());
 
       await userEvent.keyboard("{Escape}");
-      await waitFor(() => expect(screen.queryByRole("dialog", { name: "Conversations" })).toBeNull());
+      await waitFor(() =>
+        expect(screen.queryByRole("dialog", { name: "Conversations" })).toBeNull(),
+      );
       expect(toggle).toHaveFocus();
     });
 

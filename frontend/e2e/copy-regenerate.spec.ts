@@ -12,9 +12,7 @@ import { expect, test, type Page } from "@playwright/test";
 const CONV_ID = "conv-1";
 
 function sse(tokens: string[], citations: unknown[]) {
-  const tokenEvents = tokens
-    .map((t) => `event: token\ndata: ${JSON.stringify(t)}\n\n`)
-    .join("");
+  const tokenEvents = tokens.map((t) => `event: token\ndata: ${JSON.stringify(t)}\n\n`).join("");
   const citationEvent = `event: citations\ndata: ${JSON.stringify(citations)}\n\n`;
   return tokenEvents + citationEvent;
 }
@@ -96,7 +94,11 @@ test.describe("US-026 copy or regenerate an answer", () => {
     await stubClipboard(page);
     await mockConversation(page, [
       { role: "user", content: "What about outages after hours?", citations: [] },
-      { role: "assistant", content: "Sev 1 pages the on-call engineer. [1]", citations: LATEST_CITATIONS },
+      {
+        role: "assistant",
+        content: "Sev 1 pages the on-call engineer. [1]",
+        citations: LATEST_CITATIONS,
+      },
     ]);
     await page.goto("/chat");
 
@@ -115,7 +117,11 @@ test.describe("US-026 copy or regenerate an answer", () => {
   }) => {
     await mockConversation(page, [
       { role: "user", content: "What about outages after hours?", citations: [] },
-      { role: "assistant", content: "Sev 1 pages the on-call engineer. [1]", citations: LATEST_CITATIONS },
+      {
+        role: "assistant",
+        content: "Sev 1 pages the on-call engineer. [1]",
+        citations: LATEST_CITATIONS,
+      },
     ]);
 
     let requestBody = "";
@@ -175,14 +181,22 @@ test.describe("US-026 copy or regenerate an answer", () => {
 
   test("AC-098: regenerate is not offered on an earlier assistant turn", async ({ page }) => {
     await mockConversation(page, [
-      { role: "user", content: "What credit applies to a Priority 1 outage over four hours?", citations: [] },
+      {
+        role: "user",
+        content: "What credit applies to a Priority 1 outage over four hours?",
+        citations: [],
+      },
       {
         role: "assistant",
         content: "Credits apply after four hours. [1]",
         citations: OLDER_CITATIONS,
       },
       { role: "user", content: "What about outages after hours?", citations: [] },
-      { role: "assistant", content: "Sev 1 pages the on-call engineer. [1]", citations: LATEST_CITATIONS },
+      {
+        role: "assistant",
+        content: "Sev 1 pages the on-call engineer. [1]",
+        citations: LATEST_CITATIONS,
+      },
     ]);
     await page.goto("/chat");
 

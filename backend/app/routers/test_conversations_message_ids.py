@@ -321,9 +321,7 @@ def test_regenerate_with_no_relevant_chunks_refuses_without_llm_call(
 
     # Nothing clears the relevance threshold this time.
     monkeypatch.setattr(generation_module, "search", lambda db, org_id, query: _empty_search())
-    monkeypatch.setattr(
-        generation_module, "get_llm_provider", lambda: _NoAnswerCallLLMProvider()
-    )
+    monkeypatch.setattr(generation_module, "get_llm_provider", lambda: _NoAnswerCallLLMProvider())
 
     response = client.post(
         f"/conversations/{conv_id}/messages/{original_assistant.id}/regenerate", headers=headers

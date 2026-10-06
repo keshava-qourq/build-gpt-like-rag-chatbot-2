@@ -182,7 +182,10 @@ export type ChatStreamEvent =
  * function so the two request kinds cannot drift into two different parsers
  * -- only the request that produces `response` differs between them.
  */
-async function readSSE(response: Response, onEvent: (event: ChatStreamEvent) => void): Promise<void> {
+async function readSSE(
+  response: Response,
+  onEvent: (event: ChatStreamEvent) => void,
+): Promise<void> {
   const reader = response.body!.getReader();
   const decoder = new TextDecoder();
   let buffer = "";
