@@ -61,6 +61,7 @@ class DocumentUploadResult(BaseModel):
     id: uuid.UUID
     filename: str
     status: str
+    error: str | None = None
 
 
 class DocumentListItem(BaseModel):
@@ -70,6 +71,7 @@ class DocumentListItem(BaseModel):
     size_bytes: int
     uploader: str
     status: str
+    failure_reason: str | None = None
     created_at: datetime
 
 
