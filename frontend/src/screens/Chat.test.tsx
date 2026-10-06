@@ -77,12 +77,7 @@ function deferredRegenerate() {
     reject = rej;
   });
   mocked.regenerateAssistantMessage.mockImplementationOnce(
-    (
-      _convId: string,
-      messageId: string,
-      cb: (e: ChatStreamEvent) => void,
-      signal: AbortSignal,
-    ) => {
+    (_convId: string, messageId: string, cb: (e: ChatStreamEvent) => void, signal: AbortSignal) => {
       calledWithId = messageId;
       onEvent = cb;
       signal.addEventListener("abort", () => reject(new DOMException("Aborted", "AbortError")));
@@ -490,6 +485,171 @@ describe("Chat screen", () => {
       expect(await screen.findByText("Stopped")).toBeInTheDocument();
       expect(screen.getByText("Partial")).toBeInTheDocument();
       expect(screen.getByRole("button", { name: "Regenerate" })).toBeInTheDocument();
+    });
+  });
+
+  describe("inline citation markers (US-028)", () => {
+    const CITATION_2: CitationItem = {
+      marker: 2,
+      document_id: "doc-2",
+      filename: "Support SLA.pdf",
+      format: "PDF",
+      location_label: "Page 1",
+      snapshot_text: "A receipt is required for a refund.",
+    };
+
+    // AC-103: each claim carries a numbered marker, and the numbering is
+    // consecutive within the answer -- but only once the trailing citations
+    // event arrives. Before that, the same literal "[1]"/"[2]" text in the
+    // stream cannot yet be resolved to a source, so it is plain text, not a
+    // clickable marker.
+    it("renders markers [1] and [2] as clickable only once the trailing citations event arrives", async () => {
+      mocked.listConversations.mockResolvedValue([]);
+      mocked.createConversation.mockResolvedValue({ id: "conv-new" });
+      mocked.renameConversation.mockResolvedValue({ id: "conv-new", title: "Q" });
+      const stream = deferredStream();
+
+      renderScreen();
+      await screen.findByText(/No conversations yet/i);
+
+      const textbox = screen.getByLabelText("Ask a question of the uploaded documents");
+      await userEvent.type(textbox, "What is the refund policy?");
+      await userEvent.click(screen.getByRole("button", { name: "Send" }));
+
+      stream.emit({
+        type: "token",
+        token: "Refunds are available in 30 days [1], and a receipt is required [2].",
+      });
+      await screen.findByText(/Refunds are available in 30 days/);
+
+      // Text is on screen, but neither marker is a clickable source yet --
+      // the citations event has not arrived, so neither can be resolved.
+      expect(screen.queryByRole("button", { name: /^1$/ })).toBeNull();
+      expect(screen.queryByRole("button", { name: /^2$/ })).toBeNull();
+
+      stream.emit({ type: "citations", citations: [CITATION, CITATION_2] });
+      stream.resolve();
+
+      const marker1 = await screen.findByRole("button", {
+        name: /Source 1: Acme MSA v4\.pdf/i,
+      });
+      const marker2 = await screen.findByRole("button", {
+        name: /Source 2: Support SLA\.pdf/i,
+      });
+      expect(marker1).toBeInTheDocument();
+      expect(marker2).toBeInTheDocument();
+    });
+
+    // AC-104: two claims that draw on the same chunk both display marker
+    // [1], and both resolve to the identical source when opened.
+    it("renders two mentions of the same marker as two controls that both open the same source", async () => {
+      mocked.listConversations.mockResolvedValue([
+        { id: "conv-1", title: "Leave policy", updated_at: new Date().toISOString() },
+      ]);
+      mocked.getConversation.mockResolvedValue({
+        id: "conv-1",
+        title: "Leave policy",
+        messages: [
+          { id: "msg-1", role: "user", content: "How does leave accrual work?", citations: [] },
+          {
+            id: "msg-2",
+            role: "assistant",
+            content:
+              "Leave accrues monthly [1]. Unused leave also carries over under the same policy [1].",
+            citations: [CITATION],
+          },
+        ],
+      });
+
+      renderScreen();
+      await screen.findByText(/Leave accrues monthly/);
+
+      const markers = await screen.findAllByRole("button", {
+        name: /Source 1: Acme MSA v4\.pdf/i,
+      });
+      expect(markers).toHaveLength(2);
+
+      await userEvent.click(markers[1]);
+      const panel = screen.getByRole("region", { name: "Cited source" });
+      expect(within(panel).getByText("Acme MSA v4.pdf")).toBeInTheDocument();
+      expect(within(panel).getByText("Retention is thirty days.")).toBeInTheDocument();
+
+      await userEvent.click(markers[0]);
+      const panelAfterFirst = screen.getByRole("region", { name: "Cited source" });
+      expect(within(panelAfterFirst).getByText("Acme MSA v4.pdf")).toBeInTheDocument();
+    });
+
+    // AC-105: the fixed "not in the uploaded documents" reply carries no
+    // citation markers at all.
+    it("shows no citation markers on the fixed not-in-documents refusal", async () => {
+      mocked.listConversations.mockResolvedValue([
+        { id: "conv-1", title: "Sabbatical policy", updated_at: new Date().toISOString() },
+      ]);
+      mocked.getConversation.mockResolvedValue({
+        id: "conv-1",
+        title: "Sabbatical policy",
+        messages: [
+          {
+            id: "msg-1",
+            role: "user",
+            content: "What does the handbook say about sabbaticals?",
+            citations: [],
+          },
+          {
+            id: "msg-2",
+            role: "assistant",
+            content: "I don't have information about that in the uploaded documents.",
+            citations: [],
+          },
+        ],
+      });
+
+      renderScreen();
+      await screen.findByText(/I don't have information about that/);
+
+      expect(screen.queryByRole("button", { name: /^Source \d/ })).toBeNull();
+      expect(screen.queryByText("Sources")).toBeNull();
+    });
+
+    // AC-106: a marker the model printed that does not correspond to any
+    // retrieved chunk is not rendered as a clickable citation -- but the
+    // rest of the answer, including that literal marker text, still shows.
+    it("renders an unresolvable marker as plain text, not a clickable citation, while the rest of the answer still displays", async () => {
+      mocked.listConversations.mockResolvedValue([
+        { id: "conv-1", title: "Contract term", updated_at: new Date().toISOString() },
+      ]);
+      mocked.getConversation.mockResolvedValue({
+        id: "conv-1",
+        title: "Contract term",
+        messages: [
+          { id: "msg-1", role: "user", content: "What is the contract term?", citations: [] },
+          {
+            id: "msg-2",
+            role: "assistant",
+            // citations below only resolves marker 1 -- [2] was never part
+            // of the retrieved context and has no matching citation entry.
+            content: "The term is twelve months [1]. Renewal is automatic [2].",
+            citations: [CITATION],
+          },
+        ],
+      });
+
+      renderScreen();
+      await screen.findByText(/The term is twelve months/);
+
+      // The full answer text, including the unresolvable "[2]", is shown.
+      expect(screen.getByText(/Renewal is automatic/)).toBeInTheDocument();
+      expect(screen.getByText(/\[2\]/)).toBeInTheDocument();
+
+      // Marker 1 is a real, clickable citation; marker 2 is not.
+      expect(
+        screen.getByRole("button", { name: /Source 1: Acme MSA v4\.pdf/i }),
+      ).toBeInTheDocument();
+      expect(screen.queryByRole("button", { name: /Source 2:/i })).toBeNull();
+
+      // The unresolvable "[2]" is not itself a button of any kind.
+      const danglingMarker = screen.getByText("[2]");
+      expect(danglingMarker.closest("button")).toBeNull();
     });
   });
 });
