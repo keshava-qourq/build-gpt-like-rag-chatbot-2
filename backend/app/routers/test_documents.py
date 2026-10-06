@@ -448,7 +448,9 @@ def test_failed_document_still_deletable(
 
     document = db_session.query(Document).filter(Document.id == doc_id).one()
     document.status = "failed"
-    document.failure_reason = "This file appears to be corrupted or unreadable and could not be processed."
+    document.failure_reason = (
+        "This file appears to be corrupted or unreadable and could not be processed."
+    )
     db_session.commit()
 
     response = client.delete(f"/documents/{doc_id}", headers=auth_header)

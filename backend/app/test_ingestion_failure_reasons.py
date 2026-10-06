@@ -103,9 +103,7 @@ def _build_encrypted_pdf_bytes() -> bytes:
 # ---------------------------------------------------------------------------
 
 
-def test_scanned_pdf_fails_with_no_text_reason_naming_scanned_documents(
-    db, org, user, monkeypatch
-):
+def test_scanned_pdf_fails_with_no_text_reason_naming_scanned_documents(db, org, user, monkeypatch):
     pdf_bytes = _build_scanned_pdf_bytes()
     document = _make_document(db, org, user, fmt="pdf")
 
@@ -161,13 +159,16 @@ def test_corrupt_pdf_fails_with_corrupt_reason_distinct_from_password_and_no_tex
 
 
 def test_three_failure_reasons_are_mutually_distinct():
-    assert len(
-        {
-            ingestion.NO_TEXT_EXTRACTED_REASON,
-            ingestion.CORRUPT_FILE_REASON,
-            ingestion.PASSWORD_PROTECTED_REASON,
-        }
-    ) == 3
+    assert (
+        len(
+            {
+                ingestion.NO_TEXT_EXTRACTED_REASON,
+                ingestion.CORRUPT_FILE_REASON,
+                ingestion.PASSWORD_PROTECTED_REASON,
+            }
+        )
+        == 3
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -176,9 +177,7 @@ def test_three_failure_reasons_are_mutually_distinct():
 # ---------------------------------------------------------------------------
 
 
-def test_reingest_of_ready_document_that_then_fails_leaves_zero_chunks(
-    db, org, user, monkeypatch
-):
+def test_reingest_of_ready_document_that_then_fails_leaves_zero_chunks(db, org, user, monkeypatch):
     document = _make_document(db, org, user, fmt="txt")
 
     monkeypatch.setattr(ingestion, "_fetch_object", lambda key: b"some extractable content")
