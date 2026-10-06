@@ -11,6 +11,7 @@ import {
   renameConversation,
   deleteConversation,
   streamAssistantMessage,
+  regenerateAssistantMessage,
   type ConversationSummaryDTO,
   type CitationItem,
 } from "@/lib/api";
@@ -52,6 +53,9 @@ type MessageStatus = "complete" | "streaming" | "stopped" | "error";
 
 interface ChatMessage {
   id: string;
+  /** Server-assigned message id, carried from GET /conversations/{id}. Null
+   * until that id is known -- regenerate needs it and is withheld until then. */
+  serverId: string | null;
   role: "user" | "assistant";
   content: string;
   status: MessageStatus;
@@ -211,6 +215,7 @@ export default function Screen() {
       setMessages(
         detail.messages.map((m, i) => ({
           id: "loaded-" + id + "-" + i,
+          serverId: m.id ?? null,
           role: m.role,
           content: m.content,
           status: "complete",
@@ -317,6 +322,26 @@ export default function Screen() {
           },
           controller.signal,
         );
+        if (!hadError) {
+          // The stream endpoint itself does not return the server message
+          // id for the turn that just completed -- only GET /conversations/{id}
+          // does. Refetch once so Regenerate (which needs that id) becomes
+          // available for this turn without forking the SSE parser to carry it.
+          try {
+            const detail = await getConversation(convId);
+            if (detail && Array.isArray(detail.messages)) {
+              setMessages((prev) =>
+                prev.map((m, i) =>
+                  m.serverId == null && detail.messages[i]
+                    ? { ...m, serverId: detail.messages[i].id ?? null }
+                    : m,
+                ),
+              );
+            }
+          } catch {
+            /* id refresh is best-effort; Regenerate stays withheld until it succeeds */
+          }
+        }
         if (!hadError && pendingTitleRef.current.has(convId)) {
           // The first answer for this conversation completed. The server
           // generates the title from the exchange, so refresh the list now
@@ -345,6 +370,57 @@ export default function Screen() {
     [],
   );
 
+  const runRegenerate = React.useCallback(
+    async (convId: string, assistantMsgId: string, serverMessageId: string) => {
+      const controller = new AbortController();
+      streamControllerRef.current = controller;
+      setStreamingMsgId(assistantMsgId);
+      setSource(null);
+      updateMessage(assistantMsgId, { status: "streaming", content: "", citations: [] });
+      let accumulated = "";
+      try {
+        await regenerateAssistantMessage(
+          convId,
+          serverMessageId,
+          (event) => {
+            if (event.type === "token") {
+              accumulated += event.token;
+              updateMessage(assistantMsgId, { content: accumulated });
+            } else if (event.type === "citations") {
+              updateMessage(assistantMsgId, { citations: event.citations, status: "complete" });
+              setAnnounce(
+                "Answer regenerated with " +
+                  event.citations.length +
+                  (event.citations.length === 1 ? " source." : " sources."),
+              );
+            } else if (event.type === "error") {
+              updateMessage(assistantMsgId, { status: "error" });
+              setAnnounce("The answer stream failed. " + event.message);
+            }
+          },
+          controller.signal,
+        );
+      } catch (err) {
+        if (err instanceof DOMException && err.name === "AbortError") {
+          updateMessage(assistantMsgId, { status: "stopped" });
+          setAnnounce("Streaming stopped. The partial answer was kept.");
+        } else {
+          updateMessage(assistantMsgId, { status: "error" });
+          setAnnounce("The answer stream was interrupted. Check your connection and try again.");
+        }
+      } finally {
+        streamControllerRef.current = null;
+        setStreamingMsgId((current) => (current === assistantMsgId ? null : current));
+      }
+    },
+    [],
+  );
+
+  const regenerate = (msg: ChatMessage) => {
+    if (!activeId || streamingMsgId || !msg.serverId) return;
+    runRegenerate(activeId, msg.id, msg.serverId);
+  };
+
   const handleSend = async (text?: string) => {
     const q = (text === undefined ? draft : text).trim();
     if (!q || streamingMsgId) return;
@@ -352,6 +428,7 @@ export default function Screen() {
 
     const userMsg: ChatMessage = {
       id: nextId(),
+      serverId: null,
       role: "user",
       content: q,
       status: "complete",
@@ -361,6 +438,7 @@ export default function Screen() {
     const assistantId = nextId();
     const assistantMsg: ChatMessage = {
       id: assistantId,
+      serverId: null,
       role: "assistant",
       content: "",
       status: "streaming",
@@ -413,12 +491,19 @@ export default function Screen() {
 
   const copyAnswer = (msg: ChatMessage) => {
     try {
-      if (navigator.clipboard) navigator.clipboard.writeText(msg.content);
+      if (!navigator.clipboard) throw new Error("clipboard unavailable");
+      navigator.clipboard
+        .writeText(msg.content)
+        .then(() => {
+          setCopiedId(msg.id);
+          setAnnounce("Answer copied to the clipboard.");
+        })
+        .catch(() => {
+          setAnnounce("Could not copy the answer. Select and copy the text instead.");
+        });
     } catch {
-      /* clipboard unavailable in sandbox */
+      setAnnounce("Could not copy the answer. Select and copy the text instead.");
     }
-    setCopiedId(msg.id);
-    setAnnounce("Answer copied to the clipboard.");
   };
 
   const openSource = (msgId: string, marker: number, el: HTMLElement | null) => {
@@ -1249,8 +1334,8 @@ export default function Screen() {
                         {msg.id === lastAssistantId ? (
                           <button
                             type="button"
-                            onClick={() => retry(msg.id)}
-                            disabled={!!streamingMsgId}
+                            onClick={() => regenerate(msg)}
+                            disabled={!!streamingMsgId || !msg.serverId}
                             className={
                               "inline-flex items-center gap-1.5 rounded-md px-2 py-1.5 text-[12px] font-medium hover:bg-black/[0.05] disabled:opacity-40 " +
                               RING

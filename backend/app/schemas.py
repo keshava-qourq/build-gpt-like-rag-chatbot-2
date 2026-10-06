@@ -116,6 +116,7 @@ class CitationOut(BaseModel):
 
 
 class MessageOut(BaseModel):
+    id: uuid.UUID
     role: str
     content: str
     citations: list[CitationOut] = Field(default_factory=list)

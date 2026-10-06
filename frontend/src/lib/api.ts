@@ -128,6 +128,7 @@ export interface CitationItem {
 }
 
 export interface ConversationMessageDTO {
+  id?: string;
   role: "user" | "assistant";
   content: string;
   citations: CitationItem[];
@@ -176,25 +177,13 @@ export type ChatStreamEvent =
  * header, both of which this endpoint requires. `signal` is wired to an
  * `AbortController` so Stop can cut the connection from the caller.
  */
-export async function streamAssistantMessage(
-  conversationId: string,
-  content: string,
-  onEvent: (event: ChatStreamEvent) => void,
-  signal: AbortSignal,
-): Promise<void> {
-  const response = await fetch(`${API_BASE_URL}/conversations/${conversationId}/messages`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json", ...authHeaders() },
-    body: JSON.stringify({ content }),
-    signal,
-  });
-
-  if (!response.ok || !response.body) {
-    onEvent({ type: "error", message: `The request failed with status ${response.status}.` });
-    return;
-  }
-
-  const reader = response.body.getReader();
+/**
+ * Shared SSE body reader for both a fresh turn and a regenerate. Kept as one
+ * function so the two request kinds cannot drift into two different parsers
+ * -- only the request that produces `response` differs between them.
+ */
+async function readSSE(response: Response, onEvent: (event: ChatStreamEvent) => void): Promise<void> {
+  const reader = response.body!.getReader();
   const decoder = new TextDecoder();
   let buffer = "";
 
@@ -249,4 +238,54 @@ export async function streamAssistantMessage(
     }
   }
   if (buffer.trim()) handleRawEvent(buffer);
+}
+
+export async function streamAssistantMessage(
+  conversationId: string,
+  content: string,
+  onEvent: (event: ChatStreamEvent) => void,
+  signal: AbortSignal,
+): Promise<void> {
+  const response = await fetch(`${API_BASE_URL}/conversations/${conversationId}/messages`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", ...authHeaders() },
+    body: JSON.stringify({ content }),
+    signal,
+  });
+
+  if (!response.ok || !response.body) {
+    onEvent({ type: "error", message: `The request failed with status ${response.status}.` });
+    return;
+  }
+
+  await readSSE(response, onEvent);
+}
+
+/**
+ * Regenerates one assistant turn in place. Takes the server message id of
+ * the assistant message being replaced (carried on client state from
+ * `GET /conversations/{id}`), not a locally-generated id -- the backend
+ * needs it to know which turn to redo.
+ */
+export async function regenerateAssistantMessage(
+  conversationId: string,
+  messageId: string,
+  onEvent: (event: ChatStreamEvent) => void,
+  signal: AbortSignal,
+): Promise<void> {
+  const response = await fetch(
+    `${API_BASE_URL}/conversations/${conversationId}/messages/${messageId}/regenerate`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json", ...authHeaders() },
+      signal,
+    },
+  );
+
+  if (!response.ok || !response.body) {
+    onEvent({ type: "error", message: `The request failed with status ${response.status}.` });
+    return;
+  }
+
+  await readSSE(response, onEvent);
 }

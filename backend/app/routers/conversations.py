@@ -133,12 +133,13 @@ async def _persist_assistant_turn(
     status: str,
     citations: list[ResolvedCitation],
     *,
+    message_id: uuid.UUID,
     question: str | None = None,
     is_first_message: bool = False,
 ) -> None:
     now = datetime.now(UTC)
     message = Message(
-        id=uuid.uuid4(),
+        id=message_id,
         conversation_id=conversation.id,
         role="assistant",
         content=content,
@@ -185,9 +186,15 @@ async def _stream_turn(
     text_parts: list[str] = []
     citations: list[ResolvedCitation] = []
     status = "complete"
+    # Minted up front and used both as the id SSE carries and the id the
+    # turn is persisted under, so the `message` event a client receives
+    # always matches the row `GET /conversations/{id}` later returns -- the
+    # client can call regenerate on it without refetching the conversation.
+    message_id = uuid.uuid4()
 
     agen = answer_question(db, org_id, history, question)
     try:
+        yield _sse("message", {"id": str(message_id)})
         while True:
             if await is_disconnected():
                 # AC-071: stop consuming the generator -- generation is
@@ -218,6 +225,7 @@ async def _stream_turn(
             "".join(text_parts),
             status,
             citations,
+            message_id=message_id,
             question=question,
             is_first_message=is_first_message,
         )
@@ -275,6 +283,7 @@ async def get_conversation(
     )
     message_outs = [
         MessageOut(
+            id=m.id,
             role=m.role,
             content=m.content,
             citations=[

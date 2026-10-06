@@ -17,6 +17,7 @@ vi.mock("@/lib/api", async () => {
     renameConversation: vi.fn(),
     deleteConversation: vi.fn(),
     streamAssistantMessage: vi.fn(),
+    regenerateAssistantMessage: vi.fn(),
   };
 });
 
@@ -27,6 +28,7 @@ const mocked = api as unknown as {
   renameConversation: ReturnType<typeof vi.fn>;
   deleteConversation: ReturnType<typeof vi.fn>;
   streamAssistantMessage: ReturnType<typeof vi.fn>;
+  regenerateAssistantMessage: ReturnType<typeof vi.fn>;
 };
 
 function renderScreen() {
@@ -62,6 +64,38 @@ function deferredStream() {
   };
 }
 
+/** Same pattern as `deferredStream`, but for `regenerateAssistantMessage`, and
+ * it captures the message id the call was made with so tests can assert the
+ * endpoint was addressed with the server id rather than a client-local one. */
+function deferredRegenerate() {
+  let onEvent: (e: ChatStreamEvent) => void = () => {};
+  let resolve: () => void = () => {};
+  let reject: (e: unknown) => void = () => {};
+  let calledWithId = "";
+  const promise = new Promise<void>((res, rej) => {
+    resolve = res;
+    reject = rej;
+  });
+  mocked.regenerateAssistantMessage.mockImplementationOnce(
+    (
+      _convId: string,
+      messageId: string,
+      cb: (e: ChatStreamEvent) => void,
+      signal: AbortSignal,
+    ) => {
+      calledWithId = messageId;
+      onEvent = cb;
+      signal.addEventListener("abort", () => reject(new DOMException("Aborted", "AbortError")));
+      return promise;
+    },
+  );
+  return {
+    emit: (e: ChatStreamEvent) => act(() => onEvent(e)),
+    resolve: () => act(() => resolve()),
+    calledWithId: () => calledWithId,
+  };
+}
+
 const CITATION: CitationItem = {
   marker: 1,
   document_id: "doc-1",
@@ -78,6 +112,7 @@ beforeEach(() => {
   mocked.renameConversation.mockReset();
   mocked.deleteConversation.mockReset();
   mocked.streamAssistantMessage.mockReset();
+  mocked.regenerateAssistantMessage.mockReset();
 });
 
 afterEach(() => {
@@ -309,5 +344,152 @@ describe("Chat screen", () => {
     await userEvent.click(screen.getByRole("button", { name: "Delete" }));
     await waitFor(() => expect(mocked.deleteConversation).toHaveBeenCalledWith("conv-1"));
     expect(within(sidebar).queryByText("New title")).toBeNull();
+  });
+
+  describe("copy", () => {
+    beforeEach(() => {
+      mocked.listConversations.mockResolvedValue([
+        { id: "conv-1", title: "Retention periods", updated_at: new Date().toISOString() },
+      ]);
+      mocked.getConversation.mockResolvedValue({
+        id: "conv-1",
+        title: "Retention periods",
+        messages: [
+          { id: "msg-1", role: "user", content: "What is the retention period?", citations: [] },
+          { id: "msg-2", role: "assistant", content: "Thirty days.", citations: [] },
+        ],
+      });
+    });
+
+    it("places the answer text on the clipboard and shows a confirmation that clears itself", async () => {
+      const writeText = vi.fn().mockResolvedValue(undefined);
+      Object.defineProperty(navigator, "clipboard", {
+        value: { writeText },
+        configurable: true,
+      });
+      renderScreen();
+      await screen.findByText("Thirty days.");
+
+      await userEvent.click(screen.getByRole("button", { name: "Copy answer" }));
+
+      await waitFor(() => expect(writeText).toHaveBeenCalledWith("Thirty days."));
+      expect(await screen.findByText("Copied")).toBeInTheDocument();
+
+      await waitFor(() => expect(screen.queryByText("Copied")).toBeNull(), {
+        timeout: 3000,
+        interval: 100,
+      });
+    }, 8000);
+
+    it("shows a non-blocking message instead of throwing when the clipboard API fails", async () => {
+      const writeText = vi.fn().mockRejectedValue(new Error("denied"));
+      Object.defineProperty(navigator, "clipboard", {
+        value: { writeText },
+        configurable: true,
+      });
+      renderScreen();
+      await screen.findByText("Thirty days.");
+
+      await expect(
+        userEvent.click(screen.getByRole("button", { name: "Copy answer" })),
+      ).resolves.not.toThrow();
+
+      expect(
+        await screen.findByText("Could not copy the answer. Select and copy the text instead."),
+      ).toBeInTheDocument();
+      expect(screen.queryByText("Copied")).toBeNull();
+    });
+  });
+
+  describe("regenerate", () => {
+    function mockTwoTurnConversation() {
+      mocked.listConversations.mockResolvedValue([
+        { id: "conv-1", title: "Retention periods", updated_at: new Date().toISOString() },
+      ]);
+      mocked.getConversation.mockResolvedValue({
+        id: "conv-1",
+        title: "Retention periods",
+        messages: [
+          { id: "msg-1", role: "user", content: "What is the retention period?", citations: [] },
+          { id: "msg-2", role: "assistant", content: "First answer.", citations: [] },
+          { id: "msg-3", role: "user", content: "And for backups?", citations: [] },
+          { id: "msg-4", role: "assistant", content: "Second answer.", citations: [CITATION] },
+        ],
+      });
+    }
+
+    it("offers regenerate only on the most recent assistant turn; earlier turns show copy only", async () => {
+      mockTwoTurnConversation();
+      renderScreen();
+      await screen.findByText("Second answer.");
+
+      expect(screen.getAllByRole("button", { name: "Copy answer" })).toHaveLength(2);
+      expect(screen.getAllByRole("button", { name: "Regenerate" })).toHaveLength(1);
+    });
+
+    it("calls regenerate for the current assistant turn with its server message id, streams the new answer, and replaces it in place rather than appending a turn", async () => {
+      mockTwoTurnConversation();
+      const stream = deferredRegenerate();
+      renderScreen();
+      await screen.findByText("Second answer.");
+
+      await userEvent.click(screen.getByRole("button", { name: "Regenerate" }));
+      expect(mocked.regenerateAssistantMessage).toHaveBeenCalledWith(
+        "conv-1",
+        "msg-4",
+        expect.any(Function),
+        expect.any(Object),
+      );
+      expect(stream.calledWithId()).toBe("msg-4");
+
+      stream.emit({ type: "token", token: "Updated answer." });
+      await screen.findByText("Updated answer.");
+      expect(screen.queryByText("Second answer.")).toBeNull();
+
+      stream.emit({ type: "citations", citations: [CITATION] });
+      stream.resolve();
+
+      await waitFor(() =>
+        expect(screen.getByRole("button", { name: "Regenerate" })).toBeInTheDocument(),
+      );
+      // Still exactly one user/assistant pair per original turn -- no extra
+      // user turn was appended by regenerating.
+      expect(screen.getAllByText(/And for backups\?/)).toHaveLength(1);
+    });
+
+    it("renders the fixed not-in-documents reply from regenerate with no citation list and no error state", async () => {
+      mockTwoTurnConversation();
+      const stream = deferredRegenerate();
+      renderScreen();
+      await screen.findByText("Second answer.");
+
+      await userEvent.click(screen.getByRole("button", { name: "Regenerate" }));
+      stream.emit({ type: "token", token: "This is not in the uploaded documents." });
+      stream.emit({ type: "citations", citations: [] });
+      stream.resolve();
+
+      await screen.findByText("This is not in the uploaded documents.");
+      expect(screen.queryByText("Stream failed")).toBeNull();
+      expect(screen.queryByText("Sources")).toBeNull();
+    });
+
+    it("disables regenerate while a stream is in flight, and Stop aborts the regenerate stream the same way as a normal turn", async () => {
+      mockTwoTurnConversation();
+      const stream = deferredRegenerate();
+      renderScreen();
+      await screen.findByText("Second answer.");
+
+      await userEvent.click(screen.getByRole("button", { name: "Regenerate" }));
+      stream.emit({ type: "token", token: "Partial" });
+      await screen.findByText("Partial");
+
+      // The regenerate control is withheld entirely while its own turn is streaming.
+      expect(screen.queryByRole("button", { name: "Regenerate" })).toBeNull();
+
+      await userEvent.click(screen.getByRole("button", { name: "Stop" }));
+      expect(await screen.findByText("Stopped")).toBeInTheDocument();
+      expect(screen.getByText("Partial")).toBeInTheDocument();
+      expect(screen.getByRole("button", { name: "Regenerate" })).toBeInTheDocument();
+    });
   });
 });
