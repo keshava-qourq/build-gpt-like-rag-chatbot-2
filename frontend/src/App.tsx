@@ -86,10 +86,7 @@ export default function App() {
         >
           <Icons.Menu className="h-5 w-5" aria-hidden="true" />
         </button>
-        <span
-          className="text-sm font-semibold"
-          style={{ fontFamily: "var(--brand-font-heading)" }}
-        >
+        <span className="text-sm font-semibold" style={{ fontFamily: "var(--brand-font-heading)" }}>
           {"Build GPT-Like RAG Chatbot"}
         </span>
         <span className="w-8" aria-hidden="true" />
