@@ -18,9 +18,39 @@ from app.routers import auth, conversations, documents, invitations, users
 from app.schemas import HealthResponse
 from app.storage import S3_BUCKET, get_s3_client
 
+_APP_DESCRIPTION = (
+    "# Build a GPT-Like RAG Chatbot\n\n"
+    "Build a modern, production-ready RAG chatbot similar to GPT.\n\n"
+    "### Requirements\n"
+    "- Modern ChatGPT-style UI with sidebar, chat history, new chat, and responsive design.\n"
+    "- Upload PDF, DOCX, TXT, CSV and Markdown documents.\n"
+    "- Extract → chunk → embed → store documents in a vector database.\n"
+    "- Use semantic search to retrieve relevant document chunks.\n"
+    "- Use conversation history for contextual follow-up questions.\n"
+    "- Stream LLM responses in real time.\n"
+    "- Show clickable citations/sources for retrieved content.\n"
+    "- Never hallucinate; if information is unavailable, clearly say so.\n"
+    "- Support Markdown, code blocks, tables, copy and regenerate.\n"
+    "- Use clean modular architecture.\n\n"
+    "### Stack\n"
+    "- Frontend: React + TypeScript\n"
+    "- Backend: Python + FastAPI\n"
+    "- Database: PostgreSQL + pgvector\n"
+    "- LLM: configurable provider\n"
+    "- Embeddings: configurable provider\n"
+    "- Deployment: Docker + AWS\n\n"
+    "### Core Flow\n\n"
+    "```text\n"
+    "Upload → Extract → Chunk → Embed → pgvector\n"
+    "                                      ↓\n"
+    "Question → Retrieve → Context → LLM → Streaming Answer + Citations\n"
+    "```\n\n"
+    "Build the complete working flow, not a mock UI."
+)
+
 app = FastAPI(
     title="# Build GPT-Like RAG Chatbot (2)",
-    description="# Build a GPT-Like RAG Chatbot\n\nBuild a modern, production-ready RAG chatbot similar to GPT.\n\n### Requirements\n- Modern ChatGPT-style UI with sidebar, chat history, new chat, and responsive design.\n- Upload PDF, DOCX, TXT, CSV and Markdown documents.\n- Extract \u2192 chunk \u2192 embed \u2192 store documents in a vector database.\n- Use semantic search to retrieve relevant document chunks.\n- Use conversation history for contextual follow-up questions.\n- Stream LLM responses in real time.\n- Show clickable citations/sources for retrieved content.\n- Never hallucinate; if information is unavailable, clearly say so.\n- Support Markdown, code blocks, tables, copy and regenerate.\n- Use clean modular architecture.\n\n### Stack\n- Frontend: React + TypeScript\n- Backend: Python + FastAPI\n- Database: PostgreSQL + pgvector\n- LLM: configurable provider\n- Embeddings: configurable provider\n- Deployment: Docker + AWS\n\n### Core Flow\n\n```text\nUpload \u2192 Extract \u2192 Chunk \u2192 Embed \u2192 pgvector\n                                      \u2193\nQuestion \u2192 Retrieve \u2192 Context \u2192 LLM \u2192 Streaming Answer + Citations\n```\n\nBuild the complete working flow, not a mock UI.",
+    description=_APP_DESCRIPTION,
     version="0.1.0",
 )
 

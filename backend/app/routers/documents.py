@@ -4,6 +4,7 @@ GET /documents/{id}/download."""
 from __future__ import annotations
 
 import uuid
+from typing import Annotated
 
 from fastapi import APIRouter, File, UploadFile
 
@@ -18,7 +19,9 @@ router = APIRouter(tags=["documents"])
 
 
 @router.post("/documents", response_model=list[DocumentUploadResult])
-async def upload_documents(files: list[UploadFile] = File(...)) -> list[DocumentUploadResult]:
+async def upload_documents(
+    files: Annotated[list[UploadFile], File(...)],
+) -> list[DocumentUploadResult]:
     """Stub: every accepted file reported queued; type/size validation and the
     S3 upload + ingestion-queue handoff are for the handler that replaces
     this stub."""
