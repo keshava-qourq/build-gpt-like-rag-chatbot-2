@@ -12,7 +12,8 @@ from sqlalchemy.orm import Session
 
 from app.auth import RequireAuth
 from app.database import get_db
-from app.models import Document, User
+from app.deletions import DeletedDocument
+from app.models import Chunk, Citation, Document, User
 from app.queue import celery_app
 from app.schemas import (
     DocumentListItem,
@@ -132,9 +133,7 @@ async def upload_documents(
 
         celery_app.send_task(INGEST_TASK_NAME, args=[str(document.id)])
 
-        results.append(
-            DocumentUploadResult(id=document.id, filename=filename, status="queued")
-        )
+        results.append(DocumentUploadResult(id=document.id, filename=filename, status="queued"))
 
     return results
 
@@ -191,7 +190,14 @@ async def delete_document(
     db: Annotated[Session, Depends(get_db)],
 ) -> OkResponse:
     """The uploader or an admin in the same org may delete; any other
-    member in the org receives 403."""
+    member in the org receives 403 (an admin may delete any org document,
+    AC-030). Deletion is real, not a flag: the row, its chunks and their
+    embeddings and the original S3 object are all removed, and a storage
+    failure aborts the delete rather than silently passing (AC-027).
+    Citations that reference this document or its chunks survive with
+    those references nulled, and a tombstone is recorded so a later
+    download or citation resolution can say so explicitly (AC-028,
+    AC-029)."""
     org_id = uuid.UUID(claims["org_id"])
     document = db.query(Document).filter(Document.id == id, Document.org_id == org_id).one_or_none()
     if document is None:
@@ -202,9 +208,23 @@ async def delete_document(
 
     try:
         get_s3_client().delete_object(Bucket=S3_BUCKET, Key=document.s3_key)
-    except Exception:
-        pass  # best effort; the DB row is the source of truth for listings
+    except Exception as exc:
+        raise HTTPException(
+            status_code=502, detail=f"Failed to delete source document: {exc}"
+        ) from exc
 
+    chunk_ids = [
+        row.id for row in db.query(Chunk.id).filter(Chunk.document_id == document.id).all()
+    ]
+    if chunk_ids:
+        db.query(Citation).filter(Citation.chunk_id.in_(chunk_ids)).update(
+            {Citation.chunk_id: None, Citation.document_id: None}, synchronize_session=False
+        )
+    db.query(Citation).filter(Citation.document_id == document.id).update(
+        {Citation.document_id: None}, synchronize_session=False
+    )
+
+    db.add(DeletedDocument(id=document.id, org_id=org_id, deleted_at=datetime.now(UTC)))
     db.delete(document)
     db.commit()
     return OkResponse()
@@ -221,6 +241,13 @@ async def download_document(
     org_id = uuid.UUID(claims["org_id"])
     document = db.query(Document).filter(Document.id == id, Document.org_id == org_id).one_or_none()
     if document is None:
+        deleted = (
+            db.query(DeletedDocument)
+            .filter(DeletedDocument.id == id, DeletedDocument.org_id == org_id)
+            .one_or_none()
+        )
+        if deleted is not None:
+            raise HTTPException(status_code=410, detail="source document no longer available")
         raise HTTPException(status_code=404, detail="Document not found")
 
     return DownloadUrlResponse(url=f"https://example-bucket.s3.amazonaws.com/{id}?placeholder=1")

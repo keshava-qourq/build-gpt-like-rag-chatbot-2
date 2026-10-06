@@ -20,11 +20,11 @@ import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy.orm import Session
 
+import app.routers.documents as documents_module
 from app.auth import create_access_token
 from app.database import SessionLocal
 from app.main import app
 from app.models import Organization, User
-import app.routers.documents as documents_module
 
 client = TestClient(app)
 
@@ -32,12 +32,16 @@ client = TestClient(app)
 class _FakeS3:
     def __init__(self) -> None:
         self.put_calls: list[tuple[str, str, bytes]] = []
+        self.delete_calls: list[tuple[str, str]] = []
+        self.fail_delete = False
 
     def put_object(self, Bucket: str, Key: str, Body: bytes) -> None:  # noqa: N803
         self.put_calls.append((Bucket, Key, Body))
 
     def delete_object(self, Bucket: str, Key: str) -> None:  # noqa: N803
-        pass
+        if self.fail_delete:
+            raise RuntimeError("storage unavailable")
+        self.delete_calls.append((Bucket, Key))
 
 
 class _FakeCelery:
@@ -253,3 +257,217 @@ def test_get_documents_pagination_next_cursor(
     response2 = client.get(f"/documents?page={body['next']}&page_size=2", headers=auth_header)
     body2 = response2.json()
     assert len(body2["items"]) >= 1
+
+
+def _make_user(db_session: Session, org, role: str = "member") -> tuple[User, dict[str, str]]:
+    user = User(
+        id=uuid.uuid4(),
+        org_id=org.id,
+        email=f"{uuid.uuid4()}@example.com",
+        password_hash="unused",
+        role=role,
+        is_active=True,
+        created_at=datetime.now(UTC),
+    )
+    db_session.add(user)
+    db_session.commit()
+    token = create_access_token(user_id=user.id, org_id=org.id, role=user.role)
+    return user, {"Authorization": f"Bearer {token}"}
+
+
+def _upload_one(headers: dict[str, str]) -> uuid.UUID:
+    response = client.post(
+        "/documents",
+        headers=headers,
+        files=[("files", ("delete_me.txt", io.BytesIO(b"hello"), "text/plain"))],
+    )
+    return uuid.UUID(response.json()[0]["id"])
+
+
+def test_delete_requires_auth() -> None:
+    response = client.delete(f"/documents/{uuid.uuid4()}")
+    assert response.status_code == 401
+
+
+def test_delete_unknown_document_returns_404(auth_header: dict[str, str]) -> None:
+    response = client.delete(f"/documents/{uuid.uuid4()}", headers=auth_header)
+    assert response.status_code == 404
+
+
+def test_uploader_can_delete_own_document(
+    auth_header: dict[str, str], fake_s3: _FakeS3, fake_celery: _FakeCelery, db_session: Session
+) -> None:
+    doc_id = _upload_one(auth_header)
+
+    response = client.delete(f"/documents/{doc_id}", headers=auth_header)
+    assert response.status_code == 200
+    assert response.json() == {"ok": True}
+
+    from app.models import Chunk, Document
+
+    assert db_session.query(Document).filter(Document.id == doc_id).one_or_none() is None
+    assert db_session.query(Chunk).filter(Chunk.document_id == doc_id).count() == 0
+    assert len(fake_s3.delete_calls) == 1
+
+
+def test_non_uploader_non_admin_gets_403(
+    db_session: Session, fake_s3: _FakeS3, fake_celery: _FakeCelery
+) -> None:
+    org = db_session.query(Organization).first()
+    if org is None:
+        org = Organization(id=uuid.uuid4(), name="Test Org", created_at=datetime.now(UTC))
+        db_session.add(org)
+        db_session.commit()
+
+    _, uploader_headers = _make_user(db_session, org, role="member")
+    doc_id = _upload_one(uploader_headers)
+
+    _, other_headers = _make_user(db_session, org, role="member")
+    response = client.delete(f"/documents/{doc_id}", headers=other_headers)
+    assert response.status_code == 403
+
+
+def test_admin_can_delete_another_members_document(
+    db_session: Session, fake_s3: _FakeS3, fake_celery: _FakeCelery
+) -> None:
+    org = db_session.query(Organization).first()
+    if org is None:
+        org = Organization(id=uuid.uuid4(), name="Test Org", created_at=datetime.now(UTC))
+        db_session.add(org)
+        db_session.commit()
+
+    _, uploader_headers = _make_user(db_session, org, role="member")
+    doc_id = _upload_one(uploader_headers)
+
+    _, admin_headers = _make_user(db_session, org, role="admin")
+    response = client.delete(f"/documents/{doc_id}", headers=admin_headers)
+    assert response.status_code == 200
+
+    from app.models import Document
+
+    assert db_session.query(Document).filter(Document.id == doc_id).one_or_none() is None
+
+
+def test_delete_from_another_org_is_404(
+    db_session: Session, fake_s3: _FakeS3, fake_celery: _FakeCelery
+) -> None:
+    org_a = Organization(id=uuid.uuid4(), name="Org A", created_at=datetime.now(UTC))
+    org_b = Organization(id=uuid.uuid4(), name="Org B", created_at=datetime.now(UTC))
+    db_session.add_all([org_a, org_b])
+    db_session.commit()
+
+    _, headers_a = _make_user(db_session, org_a, role="member")
+    doc_id = _upload_one(headers_a)
+
+    _, headers_b = _make_user(db_session, org_b, role="admin")
+    response = client.delete(f"/documents/{doc_id}", headers=headers_b)
+    assert response.status_code == 404
+
+
+def test_storage_failure_surfaces_as_error_not_silent_pass(
+    auth_header: dict[str, str], fake_s3: _FakeS3, fake_celery: _FakeCelery, db_session: Session
+) -> None:
+    doc_id = _upload_one(auth_header)
+    fake_s3.fail_delete = True
+
+    response = client.delete(f"/documents/{doc_id}", headers=auth_header)
+    assert response.status_code >= 500
+
+    from app.models import Document
+
+    # The DB row must still exist: a failed storage delete aborts the whole op.
+    assert db_session.query(Document).filter(Document.id == doc_id).one_or_none() is not None
+
+
+def test_download_after_delete_returns_410_with_explicit_detail(
+    auth_header: dict[str, str], fake_s3: _FakeS3, fake_celery: _FakeCelery
+) -> None:
+    doc_id = _upload_one(auth_header)
+    client.delete(f"/documents/{doc_id}", headers=auth_header)
+
+    response = client.get(f"/documents/{doc_id}/download", headers=auth_header)
+    assert response.status_code == 410
+    assert response.json()["detail"] == "source document no longer available"
+
+
+def test_download_unknown_document_still_404(auth_header: dict[str, str]) -> None:
+    response = client.get(f"/documents/{uuid.uuid4()}/download", headers=auth_header)
+    assert response.status_code == 404
+
+
+def test_deleted_document_never_listed_or_downloadable_cross_org(
+    db_session: Session, fake_s3: _FakeS3, fake_celery: _FakeCelery
+) -> None:
+    org_a = Organization(id=uuid.uuid4(), name="Org A2", created_at=datetime.now(UTC))
+    org_b = Organization(id=uuid.uuid4(), name="Org B2", created_at=datetime.now(UTC))
+    db_session.add_all([org_a, org_b])
+    db_session.commit()
+
+    _, headers_a = _make_user(db_session, org_a, role="admin")
+    doc_id = _upload_one(headers_a)
+    client.delete(f"/documents/{doc_id}", headers=headers_a)
+
+    _, headers_b = _make_user(db_session, org_b, role="admin")
+    response = client.get(f"/documents/{doc_id}/download", headers=headers_b)
+    assert response.status_code == 404
+
+    listing = client.get("/documents", headers=headers_a)
+    assert all(item["id"] != str(doc_id) for item in listing.json()["items"])
+
+
+def test_citations_survive_deletion_with_nulled_references(
+    auth_header: dict[str, str], fake_s3: _FakeS3, fake_celery: _FakeCelery, db_session: Session
+) -> None:
+    doc_id = _upload_one(auth_header)
+
+    from app.models import Chunk, Citation, Conversation, Message
+
+    org = db_session.query(Organization).first()
+    user_id = uuid.UUID(
+        __import__("app.auth", fromlist=["decode_access_token"])
+        .decode_access_token(auth_header["Authorization"].split(" ", 1)[1])["sub"]
+    )
+
+    chunk = Chunk(org_id=org.id, document_id=doc_id, ordinal=0, text="hello")
+    db_session.add(chunk)
+    db_session.commit()
+
+    conversation = Conversation(
+        id=uuid.uuid4(),
+        org_id=org.id,
+        user_id=user_id,
+        title="t",
+        created_at=datetime.now(UTC),
+        updated_at=datetime.now(UTC),
+    )
+    db_session.add(conversation)
+    db_session.commit()
+
+    message = Message(
+        id=uuid.uuid4(),
+        conversation_id=conversation.id,
+        role="assistant",
+        content="answer",
+        created_at=datetime.now(UTC),
+    )
+    db_session.add(message)
+    db_session.commit()
+
+    citation = Citation(
+        id=uuid.uuid4(),
+        message_id=message.id,
+        chunk_id=chunk.id,
+        marker=1,
+        document_id=doc_id,
+        snapshot_text="hello",
+    )
+    db_session.add(citation)
+    db_session.commit()
+    citation_id = citation.id
+
+    response = client.delete(f"/documents/{doc_id}", headers=auth_header)
+    assert response.status_code == 200
+
+    survivor = db_session.query(Citation).filter(Citation.id == citation_id).one()
+    assert survivor.document_id is None
+    assert survivor.chunk_id is None
