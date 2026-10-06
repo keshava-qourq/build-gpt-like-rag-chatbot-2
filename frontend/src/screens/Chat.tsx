@@ -181,6 +181,8 @@ export default function Screen() {
   const threadRef = React.useRef<HTMLDivElement | null>(null);
   const panelRef = React.useRef<HTMLDivElement | null>(null);
   const triggerRef = React.useRef<HTMLElement | null>(null);
+  const sidebarPanelRef = React.useRef<HTMLDivElement | null>(null);
+  const sidebarTriggerRef = React.useRef<HTMLElement | null>(null);
   const composerRef = React.useRef<HTMLTextAreaElement | null>(null);
   const streamControllerRef = React.useRef<AbortController | null>(null);
   const pendingTitleRef = React.useRef<Set<string>>(new Set());
@@ -521,6 +523,16 @@ export default function Screen() {
   React.useEffect(() => {
     if (source && panelRef.current) panelRef.current.focus();
   }, [source ? source.messageId + ":" + source.marker : null]);
+
+  const closeSidebar = () => {
+    setSidebarOpen(false);
+    const el = sidebarTriggerRef.current;
+    if (el && document.contains(el)) el.focus();
+  };
+
+  React.useEffect(() => {
+    if (sidebarOpen && sidebarPanelRef.current) sidebarPanelRef.current.focus();
+  }, [sidebarOpen]);
 
   const sourceMessage = source ? messages.find((m) => m.id === source.messageId) : null;
   const sourceList = sourceMessage ? sourceMessage.citations : [];
@@ -1037,7 +1049,7 @@ export default function Screen() {
 
   return (
     <div
-      className="relative flex h-[80vh] min-h-[600px] overflow-hidden rounded-lg border"
+      className="relative flex h-[100dvh] overflow-hidden border lg:h-[80vh] lg:min-h-[600px] lg:rounded-lg"
       style={{
         borderColor: BORDER,
         backgroundColor: SURFACE,
@@ -1063,22 +1075,24 @@ export default function Screen() {
           <button
             type="button"
             aria-label="Close conversations list"
-            onClick={() => setSidebarOpen(false)}
+            onClick={closeSidebar}
             className="absolute inset-0 bg-black/30"
           />
           <div
+            ref={sidebarPanelRef}
+            tabIndex={-1}
             role="dialog"
             aria-label="Conversations"
             onKeyDown={(e) => {
-              if (e.key === "Escape") setSidebarOpen(false);
+              if (e.key === "Escape") closeSidebar();
             }}
-            className="absolute inset-y-0 left-0 w-[19rem] border-r shadow-xl"
+            className="absolute inset-y-0 left-0 w-[19rem] border-r shadow-xl outline-none"
             style={{ borderColor: BORDER, backgroundColor: SIDEBAR_BG }}
           >
             <div className="flex justify-end p-2">
               <button
                 type="button"
-                onClick={() => setSidebarOpen(false)}
+                onClick={closeSidebar}
                 aria-label="Close conversations list"
                 className={"rounded p-1.5 hover:bg-black/[0.06] " + RING}
                 style={{ color: "#3A3630" }}
@@ -1099,7 +1113,10 @@ export default function Screen() {
         >
           <button
             type="button"
-            onClick={() => setSidebarOpen(true)}
+            onClick={(e) => {
+              sidebarTriggerRef.current = e.currentTarget;
+              setSidebarOpen(true);
+            }}
             aria-label="Open conversations list"
             className={"mt-0.5 rounded p-1.5 hover:bg-black/[0.06] lg:hidden " + RING}
             style={{ color: "#3A3630" }}
@@ -1433,7 +1450,7 @@ export default function Screen() {
             onKeyDown={(e) => {
               if (e.key === "Escape") closeSource();
             }}
-            className="absolute inset-y-0 right-0 flex w-full flex-col border-l shadow-xl outline-none sm:w-[24rem] lg:static lg:w-full lg:shadow-none"
+            className="absolute inset-y-0 right-0 flex w-full flex-col border-l shadow-xl outline-none lg:static lg:w-full lg:shadow-none"
             style={{ borderColor: BORDER, backgroundColor: SIDEBAR_BG }}
           >
             <div

@@ -488,6 +488,176 @@ describe("Chat screen", () => {
     });
   });
 
+  describe("answer formatting (markdown)", () => {
+    it("renders headings, bold text and ordered/unordered lists as formatted elements, not raw markdown characters", async () => {
+      mocked.listConversations.mockResolvedValue([
+        { id: "conv-1", title: "Formatting", updated_at: new Date().toISOString() },
+      ]);
+      mocked.getConversation.mockResolvedValue({
+        id: "conv-1",
+        title: "Formatting",
+        messages: [
+          { id: "msg-1", role: "user", content: "Summarize the policy", citations: [] },
+          {
+            id: "msg-2",
+            role: "assistant",
+            content:
+              "## Summary\n\nThis is **important** text.\n\n- First point\n- Second point\n\n1. Step one\n2. Step two",
+            citations: [],
+          },
+        ],
+      });
+
+      renderScreen();
+
+      const heading = await screen.findByRole("heading", { name: "Summary" });
+      expect(heading).toBeInTheDocument();
+      expect(screen.queryByText(/##/)).toBeNull();
+
+      const bold = screen.getByText("important");
+      expect(bold.tagName).toBe("STRONG");
+      expect(screen.queryByText(/\*\*important\*\*/)).toBeNull();
+
+      expect(screen.getByText("First point").closest("ul")).not.toBeNull();
+      expect(screen.getByText("Second point").closest("ul")).not.toBeNull();
+      expect(screen.getByText("Step one").closest("ol")).not.toBeNull();
+      expect(screen.getByText("Step two").closest("ol")).not.toBeNull();
+    });
+
+    it("renders a fenced code block as a monospaced block with its own copy action, separate from the answer-level copy", async () => {
+      const writeText = vi.fn().mockResolvedValue(undefined);
+      Object.defineProperty(navigator, "clipboard", {
+        value: { writeText },
+        configurable: true,
+      });
+      mocked.listConversations.mockResolvedValue([
+        { id: "conv-1", title: "Code", updated_at: new Date().toISOString() },
+      ]);
+      mocked.getConversation.mockResolvedValue({
+        id: "conv-1",
+        title: "Code",
+        messages: [
+          { id: "msg-1", role: "user", content: "Show an example", citations: [] },
+          {
+            id: "msg-2",
+            role: "assistant",
+            content: 'Here:\n\n```python\nprint("hi")\n```\n\nThat works.',
+            citations: [],
+          },
+        ],
+      });
+
+      renderScreen();
+      await screen.findByText("That works.");
+
+      const code = screen.getByText((_, el) => el?.tagName === "CODE" && el.textContent!.includes('print("hi")'));
+      expect(code.closest("pre")).not.toBeNull();
+
+      const copyButtons = screen.getAllByRole("button", { name: /Copy code/i });
+      expect(copyButtons).toHaveLength(1);
+      expect(screen.getByRole("button", { name: "Copy answer" })).toBeInTheDocument();
+
+      await userEvent.click(copyButtons[0]);
+      await waitFor(() => expect(writeText).toHaveBeenCalledWith('print("hi")'));
+    });
+
+    it("renders a markdown table with header cells inside a horizontally scrollable container", async () => {
+      mocked.listConversations.mockResolvedValue([
+        { id: "conv-1", title: "Table", updated_at: new Date().toISOString() },
+      ]);
+      mocked.getConversation.mockResolvedValue({
+        id: "conv-1",
+        title: "Table",
+        messages: [
+          { id: "msg-1", role: "user", content: "Compare plans", citations: [] },
+          {
+            id: "msg-2",
+            role: "assistant",
+            content: "| Plan | Price |\n| --- | --- |\n| Basic | $10 |\n| Pro | $20 |",
+            citations: [],
+          },
+        ],
+      });
+
+      renderScreen();
+      const headerCell = await screen.findByRole("columnheader", { name: "Plan" });
+      expect(headerCell).toBeInTheDocument();
+      const table = headerCell.closest("table");
+      const scrollContainer = table?.parentElement;
+      expect(scrollContainer?.className).toMatch(/overflow-x-auto/);
+      expect(screen.getByRole("cell", { name: "$10" })).toBeInTheDocument();
+    });
+
+    it("escapes content that looks like HTML or a script and never executes it", async () => {
+      mocked.listConversations.mockResolvedValue([
+        { id: "conv-1", title: "Escaping", updated_at: new Date().toISOString() },
+      ]);
+      mocked.getConversation.mockResolvedValue({
+        id: "conv-1",
+        title: "Escaping",
+        messages: [
+          { id: "msg-1", role: "user", content: "Any risk?", citations: [] },
+          {
+            id: "msg-2",
+            role: "assistant",
+            content: '<img src=x onerror="window.__pwned=true" /> <script>window.__pwned=true</script>',
+            citations: [],
+          },
+        ],
+      });
+
+      renderScreen();
+      await screen.findByText(/<img src=x/);
+
+      expect((window as unknown as { __pwned?: boolean }).__pwned).toBeUndefined();
+      expect(document.querySelector("img[src='x']")).toBeNull();
+      expect(document.querySelector("script")).toBeNull();
+    });
+  });
+
+  describe("responsive layout", () => {
+    it("shows the conversations toggle on narrow width and opens the sidebar as an overlay that closes on Escape with focus returned to the trigger", async () => {
+      mocked.listConversations.mockResolvedValue([
+        { id: "conv-1", title: "Retention periods", updated_at: new Date().toISOString() },
+      ]);
+      mocked.getConversation.mockResolvedValue({ id: "conv-1", title: "Retention periods", messages: [] });
+
+      renderScreen();
+      await screen.findByRole("button", { name: "Open conversations list" });
+
+      const toggle = screen.getByRole("button", { name: "Open conversations list" });
+      await userEvent.click(toggle);
+
+      const dialog = screen.getByRole("dialog", { name: "Conversations" });
+      expect(dialog).toBeInTheDocument();
+      await waitFor(() => expect(dialog).toHaveFocus());
+
+      await userEvent.keyboard("{Escape}");
+      await waitFor(() => expect(screen.queryByRole("dialog", { name: "Conversations" })).toBeNull());
+      expect(toggle).toHaveFocus();
+    });
+
+    it("does not render the source panel as a fixed tablet-width sliver outside the desktop breakpoint", async () => {
+      mocked.listConversations.mockResolvedValue([
+        { id: "conv-1", title: "Retention periods", updated_at: new Date().toISOString() },
+      ]);
+      mocked.getConversation.mockResolvedValue({
+        id: "conv-1",
+        title: "Retention periods",
+        messages: [
+          { role: "user", content: "What is the retention period?", citations: [] },
+          { role: "assistant", content: "Thirty days [1].", citations: [CITATION] },
+        ],
+      });
+      renderScreen();
+      const marker = await screen.findByRole("button", { name: /Source 1: Acme MSA v4\.pdf/i });
+      await userEvent.click(marker);
+      const panel = screen.getByRole("region", { name: "Cited source" });
+      expect(panel.className).not.toMatch(/sm:w-\[24rem\]/);
+      expect(panel.className).toMatch(/w-full/);
+    });
+  });
+
   describe("inline citation markers (US-028)", () => {
     const CITATION_2: CitationItem = {
       marker: 2,
