@@ -12,9 +12,11 @@ from __future__ import annotations
 import asyncio
 import csv
 import io
+import os
 import uuid
 from dataclasses import dataclass
 from datetime import UTC, datetime
+from functools import lru_cache
 
 from sqlalchemy.orm import Session
 
@@ -29,8 +31,10 @@ from app.providers.embeddings import (
 from app.queue import celery_app
 from app.storage import S3_BUCKET, get_s3_client
 
-CHUNK_SIZE = 1000
-CHUNK_OVERLAP = 100
+# Target ~800-1000 token chunks with ~15% overlap, measured with the real
+# tokenizer for the configured embeddings model (AC-039).
+CHUNK_SIZE = 900
+CHUNK_OVERLAP = 135
 
 # Bounds how many times a document stuck in 'processing' (a worker killed or
 # restarted mid-document, redelivering the same task) is retried before it is
@@ -101,7 +105,7 @@ def _extract_txt_passages(data: bytes) -> list[Passage]:
     # guaranteed (AC-038).
     text = _decode(data)
     if not text.strip():
-        raise ExtractionError(NO_TEXT_EXTRACTED_REASON)
+        raise ExtractionError("no extractable text")
     return [Passage(text=text)]
 
 
@@ -214,21 +218,44 @@ def extract_text(fmt: str, data: bytes) -> str:
     return "\n".join(p.text for p in passages)
 
 
-def chunk_text(text: str, chunk_size: int = CHUNK_SIZE, overlap: int = CHUNK_OVERLAP) -> list[str]:
-    """Fixed-size character chunks with overlap -- no tokenizer dependency
-    the architecture never named."""
+@lru_cache(maxsize=1)
+def _get_tokenizer():
+    """Real tokenizer for whichever model `EMBEDDINGS_MODEL` names, so chunk
+    sizing (AC-039) is measured in actual tokens rather than characters."""
+    import tiktoken
+
+    model = os.getenv("EMBEDDINGS_MODEL", "text-embedding-3-small")
+    try:
+        return tiktoken.encoding_for_model(model)
+    except KeyError:
+        return tiktoken.get_encoding("cl100k_base")
+
+
+def chunk_text(
+    text: str,
+    chunk_size: int = CHUNK_SIZE,
+    overlap: int = CHUNK_OVERLAP,
+    tokenizer=None,
+) -> list[str]:
+    """Token-sized chunks with overlap, measured with a real tokenizer for
+    the configured embeddings model (AC-039)."""
     text = text.strip()
     if not text:
         return []
 
+    tokenizer = tokenizer or _get_tokenizer()
+    tokens = tokenizer.encode(text)
+    length = len(tokens)
+    if length <= chunk_size:
+        return [text]
+
     chunks: list[str] = []
     start = 0
-    length = len(text)
     step = max(chunk_size - overlap, 1)
 
     while start < length:
         end = min(start + chunk_size, length)
-        piece = text[start:end].strip()
+        piece = tokenizer.decode(tokens[start:end]).strip()
         if piece:
             chunks.append(piece)
         if end >= length:
