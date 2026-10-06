@@ -21,7 +21,11 @@ from sqlalchemy.orm import Session
 from app.database import SessionLocal
 from app.deletions import DeletedDocument
 from app.models import Chunk, Citation, Document
-from app.providers.embeddings import EmbeddingsProvider, get_embeddings_provider
+from app.providers.embeddings import (
+    EmbeddingProviderError,
+    EmbeddingsProvider,
+    get_embeddings_provider,
+)
 from app.queue import celery_app
 from app.storage import S3_BUCKET, get_s3_client
 
@@ -415,6 +419,8 @@ def ingest_document(self, document_id: str) -> None:
             db.commit()
             _supersede_previous_version(db, document)
         except ExtractionError as exc:
+            _mark_failed(db, document, str(exc))
+        except EmbeddingProviderError as exc:
             _mark_failed(db, document, str(exc))
         except Exception:
             # Anything unanticipated is still a per-document failure, not a
