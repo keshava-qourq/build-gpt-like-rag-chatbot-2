@@ -426,8 +426,7 @@ def test_followup_question_is_rewritten_and_retrieval_matches_the_referenced_pol
 
 def test_only_configured_recent_turns_are_passed_to_rewriting(db, org, monkeypatch):
     long_history = [
-        {"role": "user" if i % 2 == 0 else "assistant", "content": f"turn {i}"}
-        for i in range(50)
+        {"role": "user" if i % 2 == 0 else "assistant", "content": f"turn {i}"} for i in range(50)
     ]
     fake_provider = _FakeRewritingLLMProvider()
     monkeypatch.setattr(generation, "get_llm_provider", lambda: fake_provider)
@@ -482,9 +481,7 @@ def test_rewrite_provider_failure_falls_back_to_original_question(db, org, user,
     fake_provider = _FakeRewritingLLMProvider(rewrite_error=RuntimeError("provider down"))
     monkeypatch.setattr(generation, "get_llm_provider", lambda: fake_provider)
 
-    events = _collect(
-        db, org.id, "what is the capital of France?", conversation_history=history
-    )
+    events = _collect(db, org.id, "what is the capital of France?", conversation_history=history)
 
     citations_event = events[-1]
     assert isinstance(citations_event, AnswerCitations)

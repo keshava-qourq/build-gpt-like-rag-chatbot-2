@@ -149,7 +149,9 @@ def test_rewrite_query_returns_stripped_standalone_query_from_injected_client():
         {"role": "assistant", "content": "The NDA is a non-disclosure agreement."},
     ]
 
-    rewritten = asyncio.run(provider.rewrite_query(history=history, question="when does it expire?"))
+    rewritten = asyncio.run(
+        provider.rewrite_query(history=history, question="when does it expire?")
+    )
 
     assert rewritten == "When does the NDA expire?"
     call = client.chat.completions.calls[0]
