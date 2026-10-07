@@ -547,11 +547,15 @@ export default function Screen() {
       const message = err instanceof Error ? err.message : "";
       if (/\b410\b/.test(message)) {
         setUnavailableDocIds((prev) => new Set(prev).add(citation.document_id as string));
-        setDownloadError("This document has been removed from the library and cannot be downloaded.");
+        setDownloadError(
+          "This document has been removed from the library and cannot be downloaded.",
+        );
       } else if (/\b401\b|\b403\b/.test(message)) {
         setDownloadError("You are not authorised to download this file.");
       } else {
-        setDownloadError("Could not download the original file. Check your connection and try again.");
+        setDownloadError(
+          "Could not download the original file. Check your connection and try again.",
+        );
       }
     } finally {
       setDownloading(false);

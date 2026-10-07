@@ -944,9 +944,7 @@ describe("Chat screen", () => {
       mocked.getDocumentDownloadUrl.mockResolvedValue({
         url: "https://example-bucket.s3.amazonaws.com/doc-1?sig=abc",
       });
-      const clickSpy = vi
-        .spyOn(HTMLAnchorElement.prototype, "click")
-        .mockImplementation(() => {});
+      const clickSpy = vi.spyOn(HTMLAnchorElement.prototype, "click").mockImplementation(() => {});
 
       renderScreen();
       const marker = await screen.findByRole("button", { name: /Source 1: Acme MSA v4\.pdf/i });
@@ -957,9 +955,9 @@ describe("Chat screen", () => {
       await waitFor(() => expect(mocked.getDocumentDownloadUrl).toHaveBeenCalledWith("doc-1"));
       await waitFor(() => expect(clickSpy).toHaveBeenCalled());
       await waitFor(() =>
-        expect(
-          screen.getAllByText(/Download started for Acme MSA v4\.pdf/).length,
-        ).toBeGreaterThan(0),
+        expect(screen.getAllByText(/Download started for Acme MSA v4\.pdf/).length).toBeGreaterThan(
+          0,
+        ),
       );
 
       clickSpy.mockRestore();
@@ -973,9 +971,7 @@ describe("Chat screen", () => {
 
       const panel = screen.getByRole("region", { name: "Cited source" });
       expect(within(panel).getByText(/no longer available to download/i)).toBeInTheDocument();
-      expect(
-        within(panel).getByRole("button", { name: "Original unavailable" }),
-      ).toBeDisabled();
+      expect(within(panel).getByRole("button", { name: "Original unavailable" })).toBeDisabled();
     });
 
     it("shows an in-panel unavailable message and disables download on a 410 response (AC-113)", async () => {
@@ -996,9 +992,7 @@ describe("Chat screen", () => {
           within(panel).getAllByText(/removed from the library and cannot be downloaded/i).length,
         ).toBeGreaterThan(0),
       );
-      expect(
-        within(panel).getByRole("button", { name: "Original unavailable" }),
-      ).toBeDisabled();
+      expect(within(panel).getByRole("button", { name: "Original unavailable" })).toBeDisabled();
     });
 
     it("shows an in-panel error, never a silent no-op, on an unauthorised or failed download", async () => {
