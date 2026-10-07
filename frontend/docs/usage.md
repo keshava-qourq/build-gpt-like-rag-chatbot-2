@@ -28,13 +28,13 @@ person's chat history.
 
 Five formats are accepted:
 
-| Format | Extension | What gets read |
-| --- | --- | --- |
-| PDF | `.pdf` | The text of every page, with the page number kept for citation. Scanned or image-only PDFs are not read: there is no OCR in this release. |
-| Word | `.docx` | Paragraph and table text, in document order. The older `.doc` format is not supported; save as `.docx` first. |
-| Plain text | `.txt` | The whole file as written. |
-| Markdown | `.md` | Headings, lists and fenced code blocks, structure preserved, and rendered back as formatted Markdown inside answers. |
-| CSV | `.csv` | The header row and the data rows, with the row range kept for citation (for example, rows 120 to 148). |
+| Format     | Extension | What gets read                                                                                                                            |
+| ---------- | --------- | ----------------------------------------------------------------------------------------------------------------------------------------- |
+| PDF        | `.pdf`    | The text of every page, with the page number kept for citation. Scanned or image-only PDFs are not read: there is no OCR in this release. |
+| Word       | `.docx`   | Paragraph and table text, in document order. The older `.doc` format is not supported; save as `.docx` first.                             |
+| Plain text | `.txt`    | The whole file as written.                                                                                                                |
+| Markdown   | `.md`     | Headings, lists and fenced code blocks, structure preserved, and rendered back as formatted Markdown inside answers.                      |
+| CSV        | `.csv`    | The header row and the data rows, with the row range kept for citation (for example, rows 120 to 148).                                    |
 
 Anything else, including `.pptx`, `.xlsx` and images, is refused before the
 upload starts, so nothing part-formed is left in the library.
@@ -62,12 +62,12 @@ the previous version is still in place.
 
 Every document sits in exactly one of four states:
 
-| Status | What it means | Searchable? |
-| --- | --- | --- |
-| Queued | The file is stored and waiting its turn. Nothing has been read out of it yet. | No |
-| Processing | Text is being extracted, split into passages and embedded for search. | No |
-| Ready | Every passage is indexed. The document can be quoted and cited in answers. | **Yes** |
-| Failed | Nothing usable came out of the file. The library shows the reason next to the row. | No |
+| Status     | What it means                                                                      | Searchable? |
+| ---------- | ---------------------------------------------------------------------------------- | ----------- |
+| Queued     | The file is stored and waiting its turn. Nothing has been read out of it yet.      | No          |
+| Processing | Text is being extracted, split into passages and embedded for search.              | No          |
+| Ready      | Every passage is indexed. The document can be quoted and cited in answers.         | **Yes**     |
+| Failed     | Nothing usable came out of the file. The library shows the reason next to the row. | No          |
 
 Only **Ready** documents are retrievable and can be cited. Statuses update on
 their own while you watch the library; you never need to sign out and back in
@@ -166,16 +166,16 @@ anyone else, including admins, before or after removal.
 
 There are exactly two roles, member and admin:
 
-| Capability | Member | Admin |
-| --- | --- | --- |
-| Upload documents to the shared library | Yes | Yes |
-| Ask questions and open citations | Yes | Yes |
-| Download any original file | Yes | Yes |
-| Delete a document you uploaded yourself | Yes | Yes |
-| Delete a document uploaded by someone else | No | Yes |
-| Invite a colleague by email address | No | Yes |
-| Remove a member from the workspace | No | Yes |
-| Read another person's conversations | No | No |
+| Capability                                 | Member | Admin |
+| ------------------------------------------ | ------ | ----- |
+| Upload documents to the shared library     | Yes    | Yes   |
+| Ask questions and open citations           | Yes    | Yes   |
+| Download any original file                 | Yes    | Yes   |
+| Delete a document you uploaded yourself    | Yes    | Yes   |
+| Delete a document uploaded by someone else | No     | Yes   |
+| Invite a colleague by email address        | No     | Yes   |
+| Remove a member from the workspace         | No     | Yes   |
+| Read another person's conversations        | No     | No    |
 
 An admin may delete any document in the workspace. A member may delete only
 the documents they uploaded themselves; the delete action is not shown to
