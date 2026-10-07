@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-import os
-
 from app.database import SessionLocal
 from app.models import User
 from app.seed_admin import seed_admin
