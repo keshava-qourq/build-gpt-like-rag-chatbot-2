@@ -297,6 +297,32 @@ export default function Screen() {
     };
   }, []);
 
+  const refreshServerId = React.useCallback(
+    async (convId: string, assistantMsgId: string) => {
+      // The SSE stream only carries the server message id in its `message`
+      // event, which this client does not parse (see the stream handlers
+      // below); GET /conversations/{id} is the source of truth instead.
+      // Matching by position (not `serverId == null`) is required so this
+      // also works after a regenerate, which replaces a turn's id rather
+      // than leaving it null.
+      try {
+        const detail = await getConversation(convId);
+        if (!detail || !Array.isArray(detail.messages)) return;
+        setMessages((prev) => {
+          const idx = prev.findIndex((m) => m.id === assistantMsgId);
+          const serverMessage = idx !== -1 ? detail.messages[idx] : undefined;
+          if (!serverMessage || !serverMessage.id) return prev;
+          const next = [...prev];
+          next[idx] = { ...next[idx], serverId: serverMessage.id };
+          return next;
+        });
+      } catch {
+        /* id refresh is best-effort; Regenerate stays withheld until it succeeds */
+      }
+    },
+    [],
+  );
+
   const runStream = React.useCallback(
     async (convId: string, assistantMsgId: string, questionText: string) => {
       const controller = new AbortController();
@@ -333,20 +359,7 @@ export default function Screen() {
           // id for the turn that just completed -- only GET /conversations/{id}
           // does. Refetch once so Regenerate (which needs that id) becomes
           // available for this turn without forking the SSE parser to carry it.
-          try {
-            const detail = await getConversation(convId);
-            if (detail && Array.isArray(detail.messages)) {
-              setMessages((prev) =>
-                prev.map((m, i) =>
-                  m.serverId == null && detail.messages[i]
-                    ? { ...m, serverId: detail.messages[i].id ?? null }
-                    : m,
-                ),
-              );
-            }
-          } catch {
-            /* id refresh is best-effort; Regenerate stays withheld until it succeeds */
-          }
+          await refreshServerId(convId, assistantMsgId);
         }
         if (!hadError && pendingTitleRef.current.has(convId)) {
           // The first answer for this conversation completed. The server
@@ -373,7 +386,7 @@ export default function Screen() {
         setStreamingMsgId((current) => (current === assistantMsgId ? null : current));
       }
     },
-    [],
+    [refreshServerId],
   );
 
   const runRegenerate = React.useCallback(
@@ -384,6 +397,7 @@ export default function Screen() {
       setSource(null);
       updateMessage(assistantMsgId, { status: "streaming", content: "", citations: [] });
       let accumulated = "";
+      let hadError = false;
       try {
         await regenerateAssistantMessage(
           convId,
@@ -400,12 +414,21 @@ export default function Screen() {
                   (event.citations.length === 1 ? " source." : " sources."),
               );
             } else if (event.type === "error") {
+              hadError = true;
               updateMessage(assistantMsgId, { status: "error" });
               setAnnounce("The answer stream failed. " + event.message);
             }
           },
           controller.signal,
         );
+        if (!hadError) {
+          // Regenerate deletes the prior assistant row server-side and
+          // persists a new one under a new id (see
+          // app/routers/conversations.py::regenerate_message) -- without
+          // this, the client keeps pointing Regenerate at the now-deleted
+          // id and a second regenerate on the same turn 404s.
+          await refreshServerId(convId, assistantMsgId);
+        }
       } catch (err) {
         if (err instanceof DOMException && err.name === "AbortError") {
           updateMessage(assistantMsgId, { status: "stopped" });
@@ -419,7 +442,7 @@ export default function Screen() {
         setStreamingMsgId((current) => (current === assistantMsgId ? null : current));
       }
     },
-    [],
+    [refreshServerId],
   );
 
   const regenerate = (msg: ChatMessage) => {

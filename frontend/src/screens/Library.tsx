@@ -4,7 +4,13 @@ import * as UI from "@/lib/ui";
 import { Icons } from "@/lib/icons";
 import { brand } from "@/lib/brand";
 import { useNavigate } from "@/lib/navigate";
-import { listDocuments, uploadDocuments, type DocumentItem } from "@/lib/api";
+import {
+  listDocuments,
+  uploadDocuments,
+  deleteDocument,
+  getDocumentDownloadUrl,
+  type DocumentItem,
+} from "@/lib/api";
 
 const { Button, Input, Label, Table, THead, TBody, TR, TH, TD } = UI;
 
@@ -300,26 +306,53 @@ export default function Screen() {
     closeDialogs();
   };
 
-  const confirmDelete = () => {
+  const confirmDelete = async () => {
     const doc = deleteTarget;
     if (!doc) return;
-    setDocuments((prev) => prev.filter((d) => d.id !== doc.id));
-    setNotice(
-      `${doc.filename} deleted. Its chunks, embeddings and original file have been removed.`,
-    );
     closeDialogs();
+    try {
+      await deleteDocument(doc.id);
+      setDocuments((prev) => prev.filter((d) => d.id !== doc.id));
+      setNotice(
+        `${doc.filename} deleted. Its chunks, embeddings and original file have been removed.`,
+      );
+    } catch (err) {
+      const message = err instanceof Error ? err.message : "";
+      if (/\b403\b/.test(message)) {
+        setNotice(`Only ${doc.uploader} or a workspace admin can delete ${doc.filename}.`);
+      } else if (/\b404\b/.test(message)) {
+        // Already gone -- drop it from the list rather than leave a stale row.
+        setDocuments((prev) => prev.filter((d) => d.id !== doc.id));
+        setNotice(`${doc.filename} was already removed.`);
+      } else {
+        setNotice(`Could not delete ${doc.filename}. Check your connection and try again.`);
+      }
+    }
   };
 
-  const canDelete = (doc: DocumentItem) =>
-    doc.uploader === CURRENT_USER.name || CURRENT_USER.role === "admin";
-
   const requestDelete = (doc: DocumentItem, event: React.MouseEvent<HTMLButtonElement>) => {
-    if (!canDelete(doc)) {
-      setNotice(`Only ${doc.uploader} or a workspace admin can delete ${doc.filename}.`);
-      return;
-    }
     returnFocusRef.current = event.currentTarget;
     setDeleteTarget(doc);
+  };
+
+  const downloadOriginal = async (doc: DocumentItem) => {
+    try {
+      const result = await getDocumentDownloadUrl(doc.id);
+      const anchor = document.createElement("a");
+      anchor.href = result.url;
+      anchor.rel = "noopener";
+      document.body.appendChild(anchor);
+      anchor.click();
+      anchor.remove();
+      setNotice(`Downloading the original file ${doc.filename}.`);
+    } catch (err) {
+      const message = err instanceof Error ? err.message : "";
+      if (/\b410\b/.test(message)) {
+        setNotice(`${doc.filename} has been removed from the library and cannot be downloaded.`);
+      } else {
+        setNotice(`Could not download ${doc.filename}. Check your connection and try again.`);
+      }
+    }
   };
 
   const onDialogKeyDown = (event: React.KeyboardEvent) => {
@@ -976,9 +1009,7 @@ export default function Screen() {
                                   ) : null}
                                   <button
                                     type="button"
-                                    onClick={() =>
-                                      setNotice(`Downloading the original file ${doc.filename}.`)
-                                    }
+                                    onClick={() => downloadOriginal(doc)}
                                     aria-label={`Download original file ${doc.filename}`}
                                     className={"rounded-md p-2 hover:bg-stone-100 " + focusRing}
                                     style={{ color: brand.neutralColor }}
@@ -987,17 +1018,10 @@ export default function Screen() {
                                   </button>
                                   <button
                                     type="button"
-                                    aria-disabled={!canDelete(doc)}
                                     onClick={(e) => requestDelete(doc, e)}
-                                    aria-label={
-                                      canDelete(doc)
-                                        ? `Delete ${doc.filename}`
-                                        : `Delete ${doc.filename} (not available — only the uploader or an admin can delete this)`
-                                    }
+                                    aria-label={`Delete ${doc.filename}`}
                                     className={"rounded-md p-2 hover:bg-stone-100 " + focusRing}
-                                    style={{
-                                      color: canDelete(doc) ? "#8C2F23" : "rgba(110,103,91,0.45)",
-                                    }}
+                                    style={{ color: "#8C2F23" }}
                                   >
                                     <Icons.Trash className="h-4 w-4" aria-hidden="true" />
                                   </button>

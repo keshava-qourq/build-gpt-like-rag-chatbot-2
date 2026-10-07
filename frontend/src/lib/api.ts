@@ -95,6 +95,10 @@ export async function listDocuments(params: {
   return apiFetch<DocumentsListResponse>(`/documents${query ? `?${query}` : ""}`);
 }
 
+export async function deleteDocument(documentId: string): Promise<void> {
+  return apiFetch<void>(`/documents/${documentId}`, { method: "DELETE" });
+}
+
 export async function uploadDocuments(
   files: File[],
   replaceDocumentIds?: string[],
@@ -216,7 +220,11 @@ async function readSSE(
     if (eventName === "token") {
       try {
         const parsed = JSON.parse(data);
-        const token = typeof parsed === "string" ? parsed : (parsed.token ?? "");
+        // The backend's token event carries `{"text": ...}` (see
+        // `_sse("token", {"text": event.text})` in app/routers/conversations.py),
+        // not `{"token": ...}` -- `text` must be read first or every answer
+        // streams in as an empty string.
+        const token = typeof parsed === "string" ? parsed : (parsed.text ?? parsed.token ?? "");
         onEvent({ type: "token", token });
       } catch {
         onEvent({ type: "token", token: data });
@@ -236,7 +244,10 @@ async function readSSE(
       let message = "The answer stream was interrupted.";
       try {
         const parsed = JSON.parse(data);
-        message = parsed.message ?? message;
+        // The backend's error event carries `{"reason": ...}` (see
+        // `_sse("error", {"reason": reason})` in app/routers/conversations.py),
+        // not `{"message": ...}`.
+        message = parsed.reason ?? parsed.message ?? message;
       } catch {
         if (data) message = data;
       }

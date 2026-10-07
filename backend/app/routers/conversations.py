@@ -426,6 +426,22 @@ async def regenerate_message(
     if target is None:
         raise HTTPException(status_code=404, detail="Message not found")
 
+    # Per the api_spec, regenerate re-runs "the latest assistant turn" only --
+    # never an older one. Without this check, regenerating an older message
+    # would delete and re-insert it with `created_at = now()`, moving it past
+    # every message that came after it and corrupting the conversation's
+    # chronological order.
+    latest_message = (
+        db.query(Message)
+        .filter(Message.conversation_id == conversation.id)
+        .order_by(Message.created_at.desc())
+        .first()
+    )
+    if latest_message is None or latest_message.id != target.id:
+        raise HTTPException(
+            status_code=409, detail="Only the latest assistant turn can be regenerated"
+        )
+
     if target.role == "assistant":
         user_turn = (
             db.query(Message)
