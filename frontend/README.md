@@ -5,6 +5,7 @@
 Build a modern, production-ready RAG chatbot similar to GPT.
 
 ### Requirements
+
 - Modern ChatGPT-style UI with sidebar, chat history, new chat, and responsive design.
 - Upload PDF, DOCX, TXT, CSV and Markdown documents.
 - Extract → chunk → embed → store documents in a vector database.
@@ -17,6 +18,7 @@ Build a modern, production-ready RAG chatbot similar to GPT.
 - Use clean modular architecture.
 
 ### Stack
+
 - Frontend: React + TypeScript
 - Backend: Python + FastAPI
 - Database: PostgreSQL + pgvector
@@ -71,6 +73,13 @@ becomes a codebase anyone maintains.
 - `npm run test:e2e` -- Playwright acceptance tests from the `e2e/` folder beside `src/`.
   `npm run test:e2e:install` fetches the browser first. With `E2E_BASE_URL` set it runs against
   that deployed URL; without it, Playwright builds and serves this app and runs against that.
+
+## Documentation
+
+- [`docs/usage.md`](./docs/usage.md) -- usage, limitations and admin guide for
+  team members and admins: uploading documents, the four processing statuses,
+  asking questions, checking citations, and inviting or removing people.
+  Matches the in-app Help screen (`src/screens/Help.tsx`).
 
 ## Layout
 
