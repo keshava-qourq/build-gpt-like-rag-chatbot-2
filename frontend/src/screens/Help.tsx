@@ -1,38 +1,65 @@
-/* eslint-disable @typescript-eslint/ban-ts-comment */
-// @ts-nocheck
-/* eslint-disable @typescript-eslint/no-unused-vars */
-import React from "react";
+import * as React from "react";
 
 import * as UI from "@/lib/ui";
 import { Icons } from "@/lib/icons";
 import { brand } from "@/lib/brand";
 import { useNavigate } from "@/lib/navigate";
 
-const { Button, Card, CardHeader, CardTitle, CardDescription, CardContent, CardFooter, Input, Label, Select, Table, THead, TBody, TR, TH, TD, Separator } = UI;
-const { Search, Check, X, ChevronRight, ChevronDown, Users, Settings, Home, FileText, Package, Clock, Download, Upload, ArrowLeft, ArrowRight, AlertCircle, CheckCircle, MoreHorizontal } = Icons;
+const {
+  Button,
+  Card,
+  CardHeader,
+  CardTitle,
+  CardDescription,
+  CardContent,
+  CardFooter,
+  Input,
+  Label,
+  Table,
+  THead,
+  TBody,
+  TR,
+  TH,
+  TD,
+  Separator,
+} = UI;
+
+type IconType = React.ComponentType<
+  React.SVGProps<SVGSVGElement> & { size?: number; "aria-hidden"?: boolean | "true" | "false" }
+>;
 
 const SURFACE = "#FFFDF8";
 const BORDER = "#E4DED1";
 const INK = "#241F18";
 const MUTED = "#6E675B";
 
-const TONES = {
+type Tone = "neutral" | "accent" | "primary" | "danger";
+
+const TONES: Record<Tone, { fg: string; bg: string }> = {
   neutral: { fg: "#453F36", bg: "#EDE8DC" },
   accent: { fg: "#8A5312", bg: "#F6E7D3" },
   primary: { fg: "#1B5240", bg: "#DEEAE4" },
   danger: { fg: "#8C2F1A", bg: "#F6E1DB" },
 };
 
-const STATUSES = [
+interface Status {
+  id: string;
+  label: string;
+  tone: Tone;
+  icon: IconType;
+  meaning: string;
+  action: string;
+  retrievable: boolean;
+}
+
+const STATUSES: Status[] = [
   {
     id: "queued",
     label: "Queued",
     tone: "neutral",
     icon: Icons.Clock,
-    meaning:
-      "The file is stored and waiting its turn. Nothing has been read out of it yet.",
-    action:
-      "Wait. Files are picked up in the order they arrive, usually within a minute.",
+    meaning: "The file is stored and waiting its turn. Nothing has been read out of it yet.",
+    action: "Wait. Files are picked up in the order they arrive, usually within a minute.",
     retrievable: false,
   },
   {
@@ -40,10 +67,8 @@ const STATUSES = [
     label: "Processing",
     tone: "accent",
     icon: Icons.Settings,
-    meaning:
-      "Text is being extracted, split into passages and embedded for search.",
-    action:
-      "Wait. A 50MB PDF can take a few minutes. The status updates on its own.",
+    meaning: "Text is being extracted, split into passages and embedded for search.",
+    action: "Wait. A 50MB PDF can take a few minutes. The status updates on its own.",
     retrievable: false,
   },
   {
@@ -51,8 +76,7 @@ const STATUSES = [
     label: "Ready",
     tone: "primary",
     icon: Icons.CheckCircle,
-    meaning:
-      "Every passage is indexed. The document can now be quoted and cited in answers.",
+    meaning: "Every passage is indexed. The document can now be quoted and cited in answers.",
     action: "Ask a question about it in chat.",
     retrievable: true,
   },
@@ -61,15 +85,21 @@ const STATUSES = [
     label: "Failed",
     tone: "danger",
     icon: Icons.AlertCircle,
-    meaning:
-      "Nothing usable came out of the file. The library shows the reason next to the row.",
+    meaning: "Nothing usable came out of the file. The library shows the reason next to the row.",
     action:
       "Read the reason, fix the file if you can, and upload it again. The original stays downloadable.",
     retrievable: false,
   },
 ];
 
-const FORMATS = [
+interface Format {
+  format: string;
+  ext: string;
+  reads: string;
+  note: string;
+}
+
+const FORMATS: Format[] = [
   {
     format: "PDF",
     ext: ".pdf",
@@ -102,7 +132,12 @@ const FORMATS = [
   },
 ];
 
-const FAILURE_REASONS = [
+interface FailureReason {
+  reason: string;
+  detail: string;
+}
+
+const FAILURE_REASONS: FailureReason[] = [
   {
     reason: "No text could be extracted",
     detail:
@@ -125,10 +160,15 @@ const FAILURE_REASONS = [
   },
 ];
 
-const CANNOT = [
+interface CannotItem {
+  text: string;
+  why: string;
+}
+
+const CANNOT: CannotItem[] = [
   {
     text: "Answer from general knowledge",
-    why: "If nothing in the library clears the relevance threshold you get the fixed reply, \"I don't have information about that in the uploaded documents.\" No model is called at all, so there is no invented answer to catch.",
+    why: 'If nothing in the library clears the relevance threshold you get the fixed reply, "I don\'t have information about that in the uploaded documents." No model is called at all, so there is no invented answer to catch.',
   },
   {
     text: "Read scanned or image-only PDFs",
@@ -144,7 +184,7 @@ const CANNOT = [
   },
   {
     text: "Guarantee quality on non-English documents",
-    why: "Other languages are still extracted and indexed, but no language-specific retrieval tuning has been done.",
+    why: "Documents are assumed to be English. Other languages are still extracted and indexed, but no language-specific retrieval tuning has been done, so quality is not guaranteed.",
   },
   {
     text: "Pull files from Drive, SharePoint or email",
@@ -156,7 +196,13 @@ const CANNOT = [
   },
 ];
 
-const ROLE_MATRIX = [
+interface RoleRow {
+  capability: string;
+  member: boolean;
+  admin: boolean;
+}
+
+const ROLE_MATRIX: RoleRow[] = [
   { capability: "Upload documents to the shared library", member: true, admin: true },
   { capability: "Ask questions and open citations", member: true, admin: true },
   { capability: "Download any original file", member: true, admin: true },
@@ -167,7 +213,13 @@ const ROLE_MATRIX = [
   { capability: "Read another person's conversations", member: false, admin: false },
 ];
 
-const FAQ = [
+interface FaqItem {
+  id: string;
+  q: string;
+  a: string;
+}
+
+const FAQ: FaqItem[] = [
   {
     id: "faq-missing",
     q: "Why does it say it has nothing, when I know we uploaded that document?",
@@ -200,7 +252,34 @@ const FAQ = [
   },
 ];
 
-const SECTIONS = [
+type Block =
+  | { t: "p"; text: string }
+  | { t: "note"; text: string }
+  | { t: "ol"; items: string[] }
+  | { t: "ul"; items: string[] }
+  | { t: "formats" }
+  | { t: "statuses" }
+  | { t: "reasons" }
+  | { t: "cannot" }
+  | { t: "roles" }
+  | { t: "faq" };
+
+interface Article {
+  id: string;
+  title: string;
+  blocks: Block[];
+}
+
+interface Section {
+  id: string;
+  title: string;
+  icon: IconType;
+  lead: string;
+  admin?: boolean;
+  articles: Article[];
+}
+
+const SECTIONS: Section[] = [
   {
     id: "start",
     title: "Getting started",
@@ -259,7 +338,7 @@ const SECTIONS = [
           { t: "formats" },
           {
             t: "p",
-            text: "The practical limit is 50MB per file. Larger files are refused with a message naming the limit. Select as many files as you like at once: each becomes its own document with its own status, and one failure does not stop the rest.",
+            text: "The practical limit is 50MB per file, for every one of the five supported formats. Larger files are refused with a message naming the limit. Select as many files as you like at once: each becomes its own document with its own status, and one failure does not stop the rest.",
           },
         ],
       },
@@ -339,7 +418,7 @@ const SECTIONS = [
           },
           {
             t: "p",
-            text: "The fixed \"not in the uploaded documents\" reply never carries markers, because nothing was retrieved to support it.",
+            text: 'The fixed "not in the uploaded documents" reply never carries markers, because nothing was retrieved to support it.',
           },
         ],
       },
@@ -392,9 +471,7 @@ const SECTIONS = [
     title: "Common questions",
     icon: Icons.MoreHorizontal,
     lead: "The six questions new members ask in their first week.",
-    articles: [
-      { id: "faq-list", title: "Common questions", blocks: [{ t: "faq" }] },
-    ],
+    articles: [{ id: "faq-list", title: "Common questions", blocks: [{ t: "faq" }] }],
   },
   {
     id: "admin",
@@ -428,7 +505,7 @@ const SECTIONS = [
         blocks: [
           {
             t: "p",
-            text: "Removing a member ends their sessions immediately. Documents they uploaded stay in the shared library, so answers your team depends on do not quietly disappear when somebody leaves.",
+            text: "Admins invite and remove members. Removing a member ends their sessions immediately. Documents they uploaded stay in the shared library, so answers your team depends on do not quietly disappear when somebody leaves.",
           },
         ],
       },
@@ -438,7 +515,7 @@ const SECTIONS = [
         blocks: [
           {
             t: "p",
-            text: "There are exactly two roles. There is no per-document or per-folder sharing to configure.",
+            text: "There are exactly two roles. An admin may delete any document in the workspace; a member may delete only the documents they uploaded themselves. There is no per-document or per-folder sharing to configure.",
           },
           { t: "roles" },
         ],
@@ -447,7 +524,7 @@ const SECTIONS = [
   },
 ];
 
-function blockText(b) {
+function blockText(b: Block): string {
   switch (b.t) {
     case "p":
     case "note":
@@ -470,7 +547,17 @@ function blockText(b) {
   }
 }
 
-const INDEX = [];
+interface IndexEntry {
+  key: string;
+  sectionId: string;
+  sectionTitle: string;
+  admin: boolean;
+  title: string;
+  text: string;
+  faqId?: string;
+}
+
+const INDEX: IndexEntry[] = [];
 SECTIONS.forEach((section) => {
   section.articles.forEach((article) => {
     if (article.blocks.some((b) => b.t === "faq")) return;
@@ -496,12 +583,14 @@ FAQ.forEach((f) => {
   });
 });
 
-function makeSnippet(text, q) {
+function makeSnippet(text: string, q: string): string {
   const i = text.toLowerCase().indexOf(q);
   if (i < 0) return text.slice(0, 140) + (text.length > 140 ? "..." : "");
   const start = Math.max(0, i - 60);
   const end = Math.min(text.length, i + q.length + 90);
-  return (start > 0 ? "..." : "") + text.slice(start, end).trim() + (end < text.length ? "..." : "");
+  return (
+    (start > 0 ? "..." : "") + text.slice(start, end).trim() + (end < text.length ? "..." : "")
+  );
 }
 
 export default function Screen() {
@@ -509,14 +598,15 @@ export default function Screen() {
   const [query, setQuery] = React.useState("");
   const [active, setActive] = React.useState("start");
   const [showAdmin, setShowAdmin] = React.useState(false);
-  const [openFaq, setOpenFaq] = React.useState(null);
-  const panelRef = React.useRef(null);
-  const tabRefs = React.useRef({});
+  const [openFaq, setOpenFaq] = React.useState<string | null>(null);
+  const panelRef = React.useRef<HTMLElement | null>(null);
+  const tabRefs = React.useRef<Record<string, HTMLButtonElement | null>>({});
 
   const visibleSections = SECTIONS.filter((s) => !s.admin || showAdmin);
 
   React.useEffect(() => {
     if (!visibleSections.some((s) => s.id === active)) setActive("start");
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [showAdmin]);
 
   const q = query.trim().toLowerCase();
@@ -529,9 +619,9 @@ export default function Screen() {
     : 0;
 
   const section = visibleSections.find((s) => s.id === active) || visibleSections[0];
-  const ring = { ["--tw-ring-color"]: brand.primaryColor };
+  const ring = { ["--tw-ring-color" as string]: brand.primaryColor } as React.CSSProperties;
 
-  function openResult(entry) {
+  function openResult(entry: IndexEntry) {
     setActive(entry.sectionId);
     setQuery("");
     if (entry.faqId) setOpenFaq(entry.faqId);
@@ -540,12 +630,13 @@ export default function Screen() {
     });
   }
 
-  function onTabKeyDown(e) {
+  function onTabKeyDown(e: React.KeyboardEvent<HTMLDivElement>) {
     const ids = visibleSections.map((s) => s.id);
     const i = ids.indexOf(active);
-    let next = null;
+    let next: string | null = null;
     if (e.key === "ArrowDown" || e.key === "ArrowRight") next = ids[(i + 1) % ids.length];
-    else if (e.key === "ArrowUp" || e.key === "ArrowLeft") next = ids[(i - 1 + ids.length) % ids.length];
+    else if (e.key === "ArrowUp" || e.key === "ArrowLeft")
+      next = ids[(i - 1 + ids.length) % ids.length];
     else if (e.key === "Home") next = ids[0];
     else if (e.key === "End") next = ids[ids.length - 1];
     if (next) {
@@ -556,7 +647,7 @@ export default function Screen() {
     }
   }
 
-  const StatusTag = ({ s, small }) => {
+  const StatusTag = ({ s, small }: { s: Status; small?: boolean }) => {
     const Icon = s.icon;
     const tone = TONES[s.tone];
     return (
@@ -573,7 +664,7 @@ export default function Screen() {
     );
   };
 
-  function renderBlock(b, k) {
+  function renderBlock(b: Block, k: string): React.ReactNode {
     switch (b.t) {
       case "p":
         return (
@@ -593,7 +684,11 @@ export default function Screen() {
         );
       case "ol":
         return (
-          <ol key={k} className="ml-5 list-decimal space-y-2 text-[15px] leading-7" style={{ color: INK }}>
+          <ol
+            key={k}
+            className="ml-5 list-decimal space-y-2 text-[15px] leading-7"
+            style={{ color: INK }}
+          >
             {b.items.map((it, i) => (
               <li key={i} className="pl-1">
                 {it}
@@ -603,7 +698,11 @@ export default function Screen() {
         );
       case "ul":
         return (
-          <ul key={k} className="ml-5 list-disc space-y-2 text-[15px] leading-7" style={{ color: INK }}>
+          <ul
+            key={k}
+            className="ml-5 list-disc space-y-2 text-[15px] leading-7"
+            style={{ color: INK }}
+          >
             {b.items.map((it, i) => (
               <li key={i} className="pl-1">
                 {it}
@@ -669,9 +768,17 @@ export default function Screen() {
                     <TD className="text-[14px] whitespace-nowrap">
                       <span className="inline-flex items-center gap-1.5">
                         {s.retrievable ? (
-                          <Icons.Check className="h-4 w-4" aria-hidden="true" style={{ color: brand.primaryColor }} />
+                          <Icons.Check
+                            className="h-4 w-4"
+                            aria-hidden="true"
+                            style={{ color: brand.primaryColor }}
+                          />
                         ) : (
-                          <Icons.X className="h-4 w-4" aria-hidden="true" style={{ color: MUTED }} />
+                          <Icons.X
+                            className="h-4 w-4"
+                            aria-hidden="true"
+                            style={{ color: MUTED }}
+                          />
                         )}
                         {s.retrievable ? "Yes" : "No"}
                       </span>
@@ -706,7 +813,11 @@ export default function Screen() {
                   className="mt-0.5 flex h-6 w-6 shrink-0 items-center justify-center"
                   style={{ backgroundColor: TONES.danger.bg, borderRadius: brand.radius }}
                 >
-                  <Icons.X className="h-3.5 w-3.5" aria-hidden="true" style={{ color: TONES.danger.fg }} />
+                  <Icons.X
+                    className="h-3.5 w-3.5"
+                    aria-hidden="true"
+                    style={{ color: TONES.danger.fg }}
+                  />
                 </span>
                 <div>
                   <p className="text-[15px] font-semibold" style={{ color: INK }}>
@@ -741,9 +852,17 @@ export default function Screen() {
                       <TD key={i} className="whitespace-nowrap text-[14px]">
                         <span className="inline-flex items-center gap-1.5">
                           {v ? (
-                            <Icons.Check className="h-4 w-4" aria-hidden="true" style={{ color: brand.primaryColor }} />
+                            <Icons.Check
+                              className="h-4 w-4"
+                              aria-hidden="true"
+                              style={{ color: brand.primaryColor }}
+                            />
                           ) : (
-                            <Icons.X className="h-4 w-4" aria-hidden="true" style={{ color: MUTED }} />
+                            <Icons.X
+                              className="h-4 w-4"
+                              aria-hidden="true"
+                              style={{ color: MUTED }}
+                            />
                           )}
                           {v ? "Yes" : "No"}
                         </span>
@@ -773,15 +892,28 @@ export default function Screen() {
                       style={{ ...ring, color: INK, borderRadius: brand.radius }}
                     >
                       {isOpen ? (
-                        <Icons.ChevronDown className="mt-1 h-4 w-4 shrink-0" aria-hidden="true" style={{ color: brand.accentColor }} />
+                        <Icons.ChevronDown
+                          className="mt-1 h-4 w-4 shrink-0"
+                          aria-hidden="true"
+                          style={{ color: brand.accentColor }}
+                        />
                       ) : (
-                        <Icons.ChevronRight className="mt-1 h-4 w-4 shrink-0" aria-hidden="true" style={{ color: MUTED }} />
+                        <Icons.ChevronRight
+                          className="mt-1 h-4 w-4 shrink-0"
+                          aria-hidden="true"
+                          style={{ color: MUTED }}
+                        />
                       )}
                       <span>{f.q}</span>
                     </button>
                   </h4>
                   {isOpen && (
-                    <div id={"panel-" + f.id} role="region" aria-labelledby={"q-" + f.id} className="pb-4 pl-7 pr-2">
+                    <div
+                      id={"panel-" + f.id}
+                      role="region"
+                      aria-labelledby={"q-" + f.id}
+                      className="pb-4 pl-7 pr-2"
+                    >
                       <p className="text-[15px] leading-7" style={{ color: MUTED }}>
                         {f.a}
                       </p>
@@ -800,7 +932,10 @@ export default function Screen() {
   return (
     <div className="mx-auto w-full max-w-6xl px-6 py-10" style={{ fontFamily: brand.fontBody }}>
       <header className="max-w-3xl">
-        <p className="text-xs font-semibold uppercase tracking-widest" style={{ color: brand.accentColor }}>
+        <p
+          className="text-xs font-semibold uppercase tracking-widest"
+          style={{ color: brand.accentColor }}
+        >
           Reading Room
         </p>
         <h1
@@ -810,8 +945,8 @@ export default function Screen() {
           Help and limitations
         </h1>
         <p className="mt-4 text-[17px] leading-8" style={{ color: MUTED }}>
-          How to add documents, what the four processing statuses mean, how to check a citation against
-          its source, and the things this assistant will not do on purpose.
+          How to add documents, what the four processing statuses mean, how to check a citation
+          against its source, and the things this assistant will not do on purpose.
         </p>
         <p className="mt-3 text-sm" style={{ color: MUTED }}>
           Last reviewed 2 October 2026 for workspace members and admins.
@@ -821,7 +956,11 @@ export default function Screen() {
       <div className="mt-8 flex flex-wrap items-center gap-3">
         <Button
           onClick={() => navigate("chat")}
-          style={{ backgroundColor: brand.primaryColor, color: "#FFFDF8", borderRadius: brand.radius }}
+          style={{
+            backgroundColor: brand.primaryColor,
+            color: "#FFFDF8",
+            borderRadius: brand.radius,
+          }}
         >
           <span className="inline-flex items-center gap-2">
             <Icons.ArrowRight className="h-4 w-4" aria-hidden="true" />
@@ -832,7 +971,13 @@ export default function Screen() {
           type="button"
           onClick={() => navigate("library")}
           className="inline-flex items-center gap-2 border px-4 py-2 text-sm font-medium focus:outline-none focus-visible:ring-2 focus-visible:ring-offset-2"
-          style={{ ...ring, borderColor: BORDER, backgroundColor: SURFACE, color: INK, borderRadius: brand.radius }}
+          style={{
+            ...ring,
+            borderColor: BORDER,
+            backgroundColor: SURFACE,
+            color: INK,
+            borderRadius: brand.radius,
+          }}
         >
           <Icons.Package className="h-4 w-4" aria-hidden="true" />
           Document library
@@ -841,7 +986,13 @@ export default function Screen() {
           type="button"
           onClick={() => navigate("members")}
           className="inline-flex items-center gap-2 border px-4 py-2 text-sm font-medium focus:outline-none focus-visible:ring-2 focus-visible:ring-offset-2"
-          style={{ ...ring, borderColor: BORDER, backgroundColor: SURFACE, color: INK, borderRadius: brand.radius }}
+          style={{
+            ...ring,
+            borderColor: BORDER,
+            backgroundColor: SURFACE,
+            color: INK,
+            borderRadius: brand.radius,
+          }}
         >
           <Icons.Users className="h-4 w-4" aria-hidden="true" />
           Members
@@ -886,7 +1037,9 @@ export default function Screen() {
                 <button
                   key={s.id}
                   id={"tab-" + s.id}
-                  ref={(el) => (tabRefs.current[s.id] = el)}
+                  ref={(el) => {
+                    tabRefs.current[s.id] = el;
+                  }}
                   role="tab"
                   type="button"
                   aria-selected={selected}
@@ -905,12 +1058,20 @@ export default function Screen() {
                     fontWeight: selected ? 600 : 400,
                   }}
                 >
-                  <Icon className="h-4 w-4 shrink-0" aria-hidden="true" style={{ color: selected ? brand.primaryColor : MUTED }} />
+                  <Icon
+                    className="h-4 w-4 shrink-0"
+                    aria-hidden="true"
+                    style={{ color: selected ? brand.primaryColor : MUTED }}
+                  />
                   <span>{s.title}</span>
                   {s.admin && (
                     <span
                       className="ml-auto px-1.5 py-0.5 text-[11px] font-medium"
-                      style={{ backgroundColor: TONES.accent.bg, color: TONES.accent.fg, borderRadius: brand.radius }}
+                      style={{
+                        backgroundColor: TONES.accent.bg,
+                        color: TONES.accent.fg,
+                        borderRadius: brand.radius,
+                      }}
                     >
                       Admin
                     </span>
@@ -942,7 +1103,11 @@ export default function Screen() {
                 style={{ transform: showAdmin ? "translateX(1.6rem)" : "translateX(0.25rem)" }}
               />
             </button>
-            <label id="admin-toggle-label" htmlFor="" className="text-[14px] leading-6" style={{ color: MUTED }}>
+            <label
+              id="admin-toggle-label"
+              className="text-[14px] leading-6"
+              style={{ color: MUTED }}
+            >
               <span className="block font-medium" style={{ color: INK }}>
                 Show admin topics
               </span>
@@ -958,7 +1123,10 @@ export default function Screen() {
 
           {searching ? (
             <section aria-label="Search results">
-              <h2 className="text-2xl font-semibold tracking-tight" style={{ fontFamily: brand.fontHeading, color: INK }}>
+              <h2
+                className="text-2xl font-semibold tracking-tight"
+                style={{ fontFamily: brand.fontHeading, color: INK }}
+              >
                 {results.length} {results.length === 1 ? "result" : "results"} for "{query.trim()}"
               </h2>
 
@@ -970,15 +1138,29 @@ export default function Screen() {
                         type="button"
                         onClick={() => openResult(r)}
                         className="w-full border p-5 text-left focus:outline-none focus-visible:ring-2 focus-visible:ring-offset-2"
-                        style={{ ...ring, borderColor: BORDER, backgroundColor: SURFACE, borderRadius: brand.radius }}
+                        style={{
+                          ...ring,
+                          borderColor: BORDER,
+                          backgroundColor: SURFACE,
+                          borderRadius: brand.radius,
+                        }}
                       >
-                        <span className="text-xs font-semibold uppercase tracking-widest" style={{ color: brand.accentColor }}>
+                        <span
+                          className="text-xs font-semibold uppercase tracking-widest"
+                          style={{ color: brand.accentColor }}
+                        >
                           {r.sectionTitle}
                         </span>
-                        <span className="mt-1.5 block text-[16px] font-semibold" style={{ color: INK }}>
+                        <span
+                          className="mt-1.5 block text-[16px] font-semibold"
+                          style={{ color: INK }}
+                        >
                           {r.title}
                         </span>
-                        <span className="mt-1.5 block text-[14px] leading-6" style={{ color: MUTED }}>
+                        <span
+                          className="mt-1.5 block text-[14px] leading-6"
+                          style={{ color: MUTED }}
+                        >
                           {makeSnippet(r.text, q)}
                         </span>
                       </button>
@@ -988,13 +1170,24 @@ export default function Screen() {
               ) : (
                 <div
                   className="mt-6 border px-6 py-14 text-center"
-                  style={{ borderColor: BORDER, backgroundColor: SURFACE, borderRadius: brand.radius }}
+                  style={{
+                    borderColor: BORDER,
+                    backgroundColor: SURFACE,
+                    borderRadius: brand.radius,
+                  }}
                 >
-                  <Icons.Search className="mx-auto h-6 w-6" aria-hidden="true" style={{ color: MUTED }} />
+                  <Icons.Search
+                    className="mx-auto h-6 w-6"
+                    aria-hidden="true"
+                    style={{ color: MUTED }}
+                  />
                   <h3 className="mt-4 text-[17px] font-semibold" style={{ color: INK }}>
                     Nothing in the help matches that
                   </h3>
-                  <p className="mx-auto mt-2 max-w-md text-[15px] leading-7" style={{ color: MUTED }}>
+                  <p
+                    className="mx-auto mt-2 max-w-md text-[15px] leading-7"
+                    style={{ color: MUTED }}
+                  >
                     {hiddenAdminMatches > 0
                       ? hiddenAdminMatches +
                         " admin topic" +
@@ -1008,14 +1201,23 @@ export default function Screen() {
                         type="button"
                         onClick={() => setShowAdmin(true)}
                         className="border px-4 py-2 text-sm font-medium focus:outline-none focus-visible:ring-2 focus-visible:ring-offset-2"
-                        style={{ ...ring, borderColor: BORDER, color: INK, borderRadius: brand.radius }}
+                        style={{
+                          ...ring,
+                          borderColor: BORDER,
+                          color: INK,
+                          borderRadius: brand.radius,
+                        }}
                       >
                         Show admin topics
                       </button>
                     )}
                     <Button
                       onClick={() => setQuery("")}
-                      style={{ backgroundColor: brand.primaryColor, color: "#FFFDF8", borderRadius: brand.radius }}
+                      style={{
+                        backgroundColor: brand.primaryColor,
+                        color: "#FFFDF8",
+                        borderRadius: brand.radius,
+                      }}
                     >
                       Clear search
                     </Button>
@@ -1029,7 +1231,7 @@ export default function Screen() {
               role="tabpanel"
               aria-labelledby={"tab-" + section.id}
               tabIndex={-1}
-              ref={panelRef}
+              ref={panelRef as React.Ref<HTMLElement>}
               className="focus:outline-none"
             >
               <h2
@@ -1047,7 +1249,11 @@ export default function Screen() {
                   <article
                     key={a.id}
                     className="border p-7"
-                    style={{ borderColor: BORDER, backgroundColor: SURFACE, borderRadius: brand.radius }}
+                    style={{
+                      borderColor: BORDER,
+                      backgroundColor: SURFACE,
+                      borderRadius: brand.radius,
+                    }}
                   >
                     <h3
                       className="text-[19px] font-semibold tracking-tight"
@@ -1081,7 +1287,8 @@ export default function Screen() {
                 <CardHeader>
                   <CardTitle>Still stuck?</CardTitle>
                   <CardDescription>
-                    Most questions are answered faster by looking at the thing itself than by reading about it.
+                    Most questions are answered faster by looking at the thing itself than by
+                    reading about it.
                   </CardDescription>
                 </CardHeader>
                 <CardContent>
@@ -1090,7 +1297,9 @@ export default function Screen() {
                       A document is not being quoted: check its status is{" "}
                       <StatusTag s={STATUSES[2]} small /> in the library.
                     </li>
-                    <li>An answer looks wrong: open its numbered marker and read the quoted passage.</li>
+                    <li>
+                      An answer looks wrong: open its numbered marker and read the quoted passage.
+                    </li>
                     <li>Someone cannot sign in: an admin can re-invite them from Members.</li>
                   </ul>
                 </CardContent>
@@ -1098,7 +1307,11 @@ export default function Screen() {
                   <div className="flex flex-wrap gap-3">
                     <Button
                       onClick={() => navigate("library")}
-                      style={{ backgroundColor: brand.primaryColor, color: "#FFFDF8", borderRadius: brand.radius }}
+                      style={{
+                        backgroundColor: brand.primaryColor,
+                        color: "#FFFDF8",
+                        borderRadius: brand.radius,
+                      }}
                     >
                       Go to document library
                     </Button>
@@ -1106,7 +1319,12 @@ export default function Screen() {
                       type="button"
                       onClick={() => navigate("chat")}
                       className="border px-4 py-2 text-sm font-medium focus:outline-none focus-visible:ring-2 focus-visible:ring-offset-2"
-                      style={{ ...ring, borderColor: BORDER, color: INK, borderRadius: brand.radius }}
+                      style={{
+                        ...ring,
+                        borderColor: BORDER,
+                        color: INK,
+                        borderRadius: brand.radius,
+                      }}
                     >
                       Start a new chat
                     </button>
