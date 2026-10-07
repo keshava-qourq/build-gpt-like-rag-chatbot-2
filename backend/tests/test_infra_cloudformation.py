@@ -51,17 +51,13 @@ def test_three_fargate_services_on_one_cluster() -> None:
 
     assert resources["Cluster"]["Type"] == "AWS::ECS::Cluster"
 
-    services = {
-        name: res for name, res in resources.items() if res["Type"] == "AWS::ECS::Service"
-    }
+    services = {name: res for name, res in resources.items() if res["Type"] == "AWS::ECS::Service"}
     assert {"BackendService", "WorkerService", "FrontendService"} <= services.keys()
     for service in services.values():
         assert service["Properties"]["LaunchType"] == "FARGATE"
 
     task_defs = {
-        name: res
-        for name, res in resources.items()
-        if res["Type"] == "AWS::ECS::TaskDefinition"
+        name: res for name, res in resources.items() if res["Type"] == "AWS::ECS::TaskDefinition"
     }
     assert {"BackendTaskDefinition", "WorkerTaskDefinition", "FrontendTaskDefinition"} <= (
         task_defs.keys()
@@ -150,9 +146,7 @@ def test_secrets_are_arn_references_not_plaintext() -> None:
     template = _load_template()
     resources = template["Resources"]
 
-    backend_container = resources["BackendTaskDefinition"]["Properties"]["ContainerDefinitions"][
-        0
-    ]
+    backend_container = resources["BackendTaskDefinition"]["Properties"]["ContainerDefinitions"][0]
     secret_env_names = {entry["Name"] for entry in backend_container["Secrets"]}
     assert {"JWT_SECRET", "OPENAI_API_KEY"} <= secret_env_names
 
@@ -191,9 +185,7 @@ def test_backend_container_health_check_targets_health_endpoint() -> None:
     template = _load_template()
     resources = template["Resources"]
 
-    backend_container = resources["BackendTaskDefinition"]["Properties"]["ContainerDefinitions"][
-        0
-    ]
+    backend_container = resources["BackendTaskDefinition"]["Properties"]["ContainerDefinitions"][0]
     health_check_command = " ".join(backend_container["HealthCheck"]["Command"])
     assert "/health" in health_check_command
 
