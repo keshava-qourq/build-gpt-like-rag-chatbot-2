@@ -1,0 +1,515 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: >
+  RAG chatbot stack: ECS Fargate services for backend, worker and frontend
+  on one cluster, RDS PostgreSQL 16 with pgvector, S3 for document
+  originals, and an ALB terminating HTTPS in front of frontend and backend.
+  Declarative only -- nothing here is applied by this task; it is a
+  deployment artifact for a separate `aws cloudformation deploy` step.
+
+  Every container env var name below is reused unchanged from
+  backend/.env.example; none are invented here. Provider API keys, database
+  credentials and JWT_SECRET are never plaintext -- they are `Secrets`
+  entries referencing Secrets Manager ARNs (ValueFrom), per AC-118.
+
+Parameters:
+  VpcId:
+    Type: AWS::EC2::VPC::Id
+    Description: VPC the cluster, RDS instance and ALB are placed in.
+  PublicSubnetIds:
+    Type: List<AWS::EC2::Subnet::Id>
+    Description: Subnets for the ALB (needs at least two, in different AZs).
+  PrivateSubnetIds:
+    Type: List<AWS::EC2::Subnet::Id>
+    Description: Subnets for the Fargate tasks and the RDS instance.
+  CertificateArn:
+    Type: String
+    Description: ACM certificate ARN for the HTTPS listener (issued out of band).
+  BackendImage:
+    Type: String
+    Description: Backend/worker container image URI (built from backend/Dockerfile), e.g. <account>.dkr.ecr.<region>.amazonaws.com/rag-backend:<tag>.
+  FrontendImage:
+    Type: String
+    Description: Frontend container image URI (built from frontend/Dockerfile).
+  FrontendOrigin:
+    Type: String
+    Description: >
+      The deployed frontend's public HTTPS origin, e.g. https://app.example.com.
+      Injected into the backend task as ALLOWED_ORIGINS (AC-117).
+  DbMasterUsername:
+    Type: String
+    Default: postgres
+    NoEcho: true
+  DbName:
+    Type: String
+    Default: app
+  DbInstanceClass:
+    Type: String
+    Default: db.t4g.medium
+  S3BucketName:
+    Type: String
+    Description: Name of the S3 bucket for document originals; must be globally unique.
+  AdminEmail:
+    Type: String
+    Description: Initial admin account email (app/seed_admin.py); leave blank to skip seeding.
+    Default: ""
+  # Secret references -- these parameters hold ARNs, never secret values.
+  DbCredentialsSecretArn:
+    Type: String
+    Description: >
+      Secrets Manager secret ARN holding {"username":..., "password":...}
+      for the RDS instance, referenced below rather than any plaintext
+      credential (AC-118). Rotate via Secrets Manager; this template reads
+      it at task-start via the ECS `Secrets` field only.
+  JwtSecretArn:
+    Type: String
+    Description: Secrets Manager/SSM ARN holding the JWT_SECRET value.
+  OpenAiApiKeySecretArn:
+    Type: String
+    Description: Secrets Manager/SSM ARN holding the OPENAI_API_KEY value.
+  AdminPasswordSecretArn:
+    Type: String
+    Description: Secrets Manager/SSM ARN holding the initial ADMIN_PASSWORD value.
+    Default: ""
+
+Conditions:
+  HasAdminEmail: !Not [!Equals [!Ref AdminEmail, ""]]
+
+Resources:
+  # ---------------------------------------------------------------- Cluster
+  Cluster:
+    Type: AWS::ECS::Cluster
+    Properties:
+      ClusterName: rag-chatbot
+
+  LogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: /ecs/rag-chatbot
+      RetentionInDays: 30
+
+  # --------------------------------------------------------------- Networking
+  AlbSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: ALB -- allows inbound HTTPS from the internet.
+      VpcId: !Ref VpcId
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 443
+          ToPort: 443
+          CidrIp: 0.0.0.0/0
+
+  ServiceSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: ECS services -- allows inbound only from the ALB.
+      VpcId: !Ref VpcId
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 8000
+          ToPort: 8000
+          SourceSecurityGroupId: !Ref AlbSecurityGroup
+        - IpProtocol: tcp
+          FromPort: 80
+          ToPort: 80
+          SourceSecurityGroupId: !Ref AlbSecurityGroup
+
+  DbSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: RDS -- allows inbound Postgres only from the ECS services.
+      VpcId: !Ref VpcId
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 5432
+          ToPort: 5432
+          SourceSecurityGroupId: !Ref ServiceSecurityGroup
+
+  # ------------------------------------------------------------- RDS Postgres
+  DbSubnetGroup:
+    Type: AWS::RDS::DBSubnetGroup
+    Properties:
+      DBSubnetGroupDescription: Private subnets for the RDS instance.
+      SubnetIds: !Ref PrivateSubnetIds
+
+  # Postgres 16 with pgvector: RDS's `rds.extensions` parameter group
+  # controls which extensions CREATE EXTENSION is allowed to install; vector
+  # must be in the allow-list for app/database.py's `CREATE EXTENSION IF NOT
+  # EXISTS vector` (run automatically on first connect) to succeed.
+  DbParameterGroup:
+    Type: AWS::RDS::DBParameterGroup
+    Properties:
+      Family: postgres16
+      Description: Allows the pgvector extension.
+      Parameters:
+        shared_preload_libraries: vector
+
+  Database:
+    Type: AWS::RDS::DBInstance
+    DeletionPolicy: Snapshot
+    Properties:
+      Engine: postgres
+      EngineVersion: "16"
+      DBInstanceClass: !Ref DbInstanceClass
+      AllocatedStorage: "50"
+      StorageType: gp3
+      DBName: !Ref DbName
+      MasterUsername: !Sub "{{resolve:secretsmanager:${DbCredentialsSecretArn}:SecretString:username}}"
+      MasterUserPassword: !Sub "{{resolve:secretsmanager:${DbCredentialsSecretArn}:SecretString:password}}"
+      DBSubnetGroupName: !Ref DbSubnetGroup
+      DBParameterGroupName: !Ref DbParameterGroup
+      VPCSecurityGroups:
+        - !Ref DbSecurityGroup
+      PubliclyAccessible: false
+      StorageEncrypted: true
+      BackupRetentionPeriod: 7
+
+  # -------------------------------------------------------------- S3 bucket
+  DocumentsBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: !Ref S3BucketName
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault:
+              SSEAlgorithm: AES256
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+
+  # -------------------------------------------------------------------- ALB
+  LoadBalancer:
+    Type: AWS::ElasticLoadBalancingV2::LoadBalancer
+    Properties:
+      Name: rag-chatbot-alb
+      Scheme: internet-facing
+      Subnets: !Ref PublicSubnetIds
+      SecurityGroups:
+        - !Ref AlbSecurityGroup
+
+  FrontendTargetGroup:
+    Type: AWS::ElasticLoadBalancingV2::TargetGroup
+    Properties:
+      Name: rag-chatbot-frontend-tg
+      Port: 80
+      Protocol: HTTP
+      TargetType: ip
+      VpcId: !Ref VpcId
+      HealthCheckPath: /
+
+  BackendTargetGroup:
+    Type: AWS::ElasticLoadBalancingV2::TargetGroup
+    Properties:
+      Name: rag-chatbot-backend-tg
+      Port: 8000
+      Protocol: HTTP
+      TargetType: ip
+      VpcId: !Ref VpcId
+      # Same endpoint ECS uses for the container health check (AC-119) --
+      # both the ALB and ECS agree a backend task is unhealthy together.
+      HealthCheckPath: /health
+      HealthCheckIntervalSeconds: 15
+      HealthyThresholdCount: 2
+      UnhealthyThresholdCount: 3
+
+  HttpsListener:
+    Type: AWS::ElasticLoadBalancingV2::Listener
+    Properties:
+      LoadBalancerArn: !Ref LoadBalancer
+      Port: 443
+      Protocol: HTTPS
+      Certificates:
+        - CertificateArn: !Ref CertificateArn
+      DefaultActions:
+        - Type: forward
+          TargetGroupArn: !Ref FrontendTargetGroup
+
+  # Routes /api* (the FastAPI backend's surface) to the backend service;
+  # everything else goes to the frontend static build by the listener's
+  # default action above.
+  BackendListenerRule:
+    Type: AWS::ElasticLoadBalancingV2::ListenerRule
+    Properties:
+      ListenerArn: !Ref HttpsListener
+      Priority: 10
+      Conditions:
+        - Field: path-pattern
+          Values:
+            - "/api/*"
+            - "/health"
+            - "/docs"
+            - "/openapi.json"
+      Actions:
+        - Type: forward
+          TargetGroupArn: !Ref BackendTargetGroup
+
+  # ------------------------------------------------------------ IAM roles
+  TaskExecutionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: ecs-tasks.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AmazonECSTaskExecutionRolePolicy
+      Policies:
+        # Lets the execution role resolve the secret ARNs below into the
+        # plaintext env values ECS injects at container start -- the only
+        # place a secret value exists is inside Secrets Manager/SSM itself.
+        - PolicyName: ReadDeploymentSecrets
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action:
+                  - secretsmanager:GetSecretValue
+                  - ssm:GetParameters
+                Resource:
+                  - !Ref DbCredentialsSecretArn
+                  - !Ref JwtSecretArn
+                  - !Ref OpenAiApiKeySecretArn
+                  - !Ref AdminPasswordSecretArn
+
+  TaskRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: ecs-tasks.amazonaws.com
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: DocumentsBucketAccess
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action:
+                  - s3:GetObject
+                  - s3:PutObject
+                  - s3:DeleteObject
+                  - s3:HeadBucket
+                Resource:
+                  - !Sub "arn:aws:s3:::${S3BucketName}"
+                  - !Sub "arn:aws:s3:::${S3BucketName}/*"
+
+  # --------------------------------------------------------- Task definitions
+  # DATABASE_URL, S3_BUCKET/AWS_REGION and the secret-backed vars below are
+  # exactly the names backend/.env.example declares -- no parallel names are
+  # introduced here (AC-117, constraint). S3_ENDPOINT_URL is deliberately
+  # never set on these tasks, so app/storage.py's boto3 client talks to the
+  # real AWS S3 endpoint instead of the local MinIO one it uses in compose.
+  BackendTaskDefinition:
+    Type: AWS::ECS::TaskDefinition
+    Properties:
+      Family: rag-chatbot-backend
+      RequiresCompatibilities: [FARGATE]
+      NetworkMode: awsvpc
+      Cpu: "512"
+      Memory: "1024"
+      ExecutionRoleArn: !GetAtt TaskExecutionRole.Arn
+      TaskRoleArn: !GetAtt TaskRole.Arn
+      ContainerDefinitions:
+        - Name: backend
+          Image: !Ref BackendImage
+          PortMappings:
+            - ContainerPort: 8000
+          Environment:
+            - Name: DATABASE_URL
+              Value: !Sub "postgresql+psycopg://${DbMasterUsername}@${Database.Endpoint.Address}:${Database.Endpoint.Port}/${DbName}"
+            - Name: ALLOWED_ORIGINS
+              Value: !Ref FrontendOrigin
+            - Name: S3_BUCKET
+              Value: !Ref S3BucketName
+            - Name: AWS_REGION
+              Value: !Ref AWS::Region
+            - Name: CELERY_BROKER_URL
+              Value: !Sub "sqs://${AWS::Region}"
+            - Name: LLM_PROVIDER
+              Value: openai
+            - Name: EMBEDDINGS_PROVIDER
+              Value: openai
+            - Name: ADMIN_EMAIL
+              Value: !If [HasAdminEmail, !Ref AdminEmail, !Ref "AWS::NoValue"]
+            # S3_ENDPOINT_URL intentionally absent: unset means boto3 talks
+            # to AWS S3 directly (app/storage.py), per AC-117.
+          Secrets:
+            - Name: JWT_SECRET
+              ValueFrom: !Ref JwtSecretArn
+            - Name: OPENAI_API_KEY
+              ValueFrom: !Ref OpenAiApiKeySecretArn
+            - Name: ADMIN_PASSWORD
+              ValueFrom: !Ref AdminPasswordSecretArn
+          LogConfiguration:
+            LogDriver: awslogs
+            Options:
+              awslogs-group: !Ref LogGroup
+              awslogs-region: !Ref AWS::Region
+              awslogs-stream-prefix: backend
+          # Mirrors the same GET /health contract backend/Dockerfile's own
+          # HEALTHCHECK uses; a non-reporting or failing check here is what
+          # the ECS service (below) treats as an unhealthy deployment
+          # (AC-119).
+          HealthCheck:
+            Command:
+              - CMD-SHELL
+              - "python -c \"import urllib.request; urllib.request.urlopen('http://localhost:8000/health', timeout=3)\""
+            Interval: 30
+            Timeout: 5
+            Retries: 3
+            StartPeriod: 30
+
+  WorkerTaskDefinition:
+    Type: AWS::ECS::TaskDefinition
+    Properties:
+      Family: rag-chatbot-worker
+      RequiresCompatibilities: [FARGATE]
+      NetworkMode: awsvpc
+      Cpu: "512"
+      Memory: "1024"
+      ExecutionRoleArn: !GetAtt TaskExecutionRole.Arn
+      TaskRoleArn: !GetAtt TaskRole.Arn
+      ContainerDefinitions:
+        - Name: worker
+          Image: !Ref BackendImage
+          Command:
+            - celery
+            - -A
+            - app.ingestion:celery_app
+            - worker
+            - --loglevel=info
+          Environment:
+            - Name: DATABASE_URL
+              Value: !Sub "postgresql+psycopg://${DbMasterUsername}@${Database.Endpoint.Address}:${Database.Endpoint.Port}/${DbName}"
+            - Name: S3_BUCKET
+              Value: !Ref S3BucketName
+            - Name: AWS_REGION
+              Value: !Ref AWS::Region
+            - Name: CELERY_BROKER_URL
+              Value: !Sub "sqs://${AWS::Region}"
+            - Name: LLM_PROVIDER
+              Value: openai
+            - Name: EMBEDDINGS_PROVIDER
+              Value: openai
+            # S3_ENDPOINT_URL intentionally absent -- see BackendTaskDefinition.
+          Secrets:
+            - Name: JWT_SECRET
+              ValueFrom: !Ref JwtSecretArn
+            - Name: OPENAI_API_KEY
+              ValueFrom: !Ref OpenAiApiKeySecretArn
+          LogConfiguration:
+            LogDriver: awslogs
+            Options:
+              awslogs-group: !Ref LogGroup
+              awslogs-region: !Ref AWS::Region
+              awslogs-stream-prefix: worker
+
+  FrontendTaskDefinition:
+    Type: AWS::ECS::TaskDefinition
+    Properties:
+      Family: rag-chatbot-frontend
+      RequiresCompatibilities: [FARGATE]
+      NetworkMode: awsvpc
+      Cpu: "256"
+      Memory: "512"
+      ExecutionRoleArn: !GetAtt TaskExecutionRole.Arn
+      ContainerDefinitions:
+        - Name: frontend
+          Image: !Ref FrontendImage
+          PortMappings:
+            - ContainerPort: 80
+          LogConfiguration:
+            LogDriver: awslogs
+            Options:
+              awslogs-group: !Ref LogGroup
+              awslogs-region: !Ref AWS::Region
+              awslogs-stream-prefix: frontend
+
+  # -------------------------------------------------------------- Services
+  BackendService:
+    Type: AWS::ECS::Service
+    DependsOn: BackendListenerRule
+    Properties:
+      ServiceName: backend
+      Cluster: !Ref Cluster
+      TaskDefinition: !Ref BackendTaskDefinition
+      DesiredCount: 2
+      LaunchType: FARGATE
+      # A task whose container HealthCheck fails (or never reports) is never
+      # considered RUNNING/healthy, and this deployment configuration makes
+      # that failure roll the deployment back rather than leave bad tasks
+      # serving traffic (AC-119).
+      DeploymentConfiguration:
+        MaximumPercent: 200
+        MinimumHealthyPercent: 100
+        DeploymentCircuitBreaker:
+          Enable: true
+          Rollback: true
+      NetworkConfiguration:
+        AwsvpcConfiguration:
+          Subnets: !Ref PrivateSubnetIds
+          SecurityGroups:
+            - !Ref ServiceSecurityGroup
+      LoadBalancers:
+        - ContainerName: backend
+          ContainerPort: 8000
+          TargetGroupArn: !Ref BackendTargetGroup
+      HealthCheckGracePeriodSeconds: 60
+
+  WorkerService:
+    Type: AWS::ECS::Service
+    Properties:
+      ServiceName: worker
+      Cluster: !Ref Cluster
+      TaskDefinition: !Ref WorkerTaskDefinition
+      DesiredCount: 2
+      LaunchType: FARGATE
+      DeploymentConfiguration:
+        MaximumPercent: 200
+        MinimumHealthyPercent: 100
+      NetworkConfiguration:
+        AwsvpcConfiguration:
+          Subnets: !Ref PrivateSubnetIds
+          SecurityGroups:
+            - !Ref ServiceSecurityGroup
+
+  FrontendService:
+    Type: AWS::ECS::Service
+    DependsOn: HttpsListener
+    Properties:
+      ServiceName: frontend
+      Cluster: !Ref Cluster
+      TaskDefinition: !Ref FrontendTaskDefinition
+      DesiredCount: 2
+      LaunchType: FARGATE
+      DeploymentConfiguration:
+        MaximumPercent: 200
+        MinimumHealthyPercent: 100
+        DeploymentCircuitBreaker:
+          Enable: true
+          Rollback: true
+      NetworkConfiguration:
+        AwsvpcConfiguration:
+          Subnets: !Ref PrivateSubnetIds
+          SecurityGroups:
+            - !Ref ServiceSecurityGroup
+      LoadBalancers:
+        - ContainerName: frontend
+          ContainerPort: 80
+          TargetGroupArn: !Ref FrontendTargetGroup
+
+Outputs:
+  LoadBalancerDnsName:
+    Value: !GetAtt LoadBalancer.DNSName
+  DatabaseEndpoint:
+    Value: !GetAtt Database.Endpoint.Address
+  DocumentsBucketName:
+    Value: !Ref DocumentsBucket
