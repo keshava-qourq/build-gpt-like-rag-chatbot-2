@@ -12,6 +12,7 @@ import {
   deleteConversation,
   streamAssistantMessage,
   regenerateAssistantMessage,
+  getDocumentDownloadUrl,
   type ConversationSummaryDTO,
   type CitationItem,
 } from "@/lib/api";
@@ -174,6 +175,9 @@ export default function Screen() {
   const [source, setSource] = React.useState<SourceRef | null>(null);
   const [copiedId, setCopiedId] = React.useState<string | null>(null);
   const [downloadNote, setDownloadNote] = React.useState("");
+  const [downloadError, setDownloadError] = React.useState("");
+  const [downloading, setDownloading] = React.useState(false);
+  const [unavailableDocIds, setUnavailableDocIds] = React.useState<Set<string>>(new Set());
   const [sidebarOpen, setSidebarOpen] = React.useState(false);
   const [announce, setAnnounce] = React.useState("");
 
@@ -512,6 +516,46 @@ export default function Screen() {
     triggerRef.current = el;
     setSource({ messageId: msgId, marker });
     setDownloadNote("");
+    setDownloadError("");
+  };
+
+  const switchSource = (marker: number) => {
+    if (!source) return;
+    setSource({ messageId: source.messageId, marker });
+    setDownloadNote("");
+    setDownloadError("");
+  };
+
+  const downloadOriginal = async (citation: CitationItem) => {
+    if (!citation.document_id) {
+      setDownloadError("The original file is no longer available.");
+      return;
+    }
+    setDownloadNote("");
+    setDownloadError("");
+    setDownloading(true);
+    try {
+      const result = await getDocumentDownloadUrl(citation.document_id);
+      const anchor = document.createElement("a");
+      anchor.href = result.url;
+      anchor.rel = "noopener";
+      document.body.appendChild(anchor);
+      anchor.click();
+      anchor.remove();
+      setDownloadNote("Download started for " + citation.filename + ".");
+    } catch (err) {
+      const message = err instanceof Error ? err.message : "";
+      if (/\b410\b/.test(message)) {
+        setUnavailableDocIds((prev) => new Set(prev).add(citation.document_id as string));
+        setDownloadError("This document has been removed from the library and cannot be downloaded.");
+      } else if (/\b401\b|\b403\b/.test(message)) {
+        setDownloadError("You are not authorised to download this file.");
+      } else {
+        setDownloadError("Could not download the original file. Check your connection and try again.");
+      }
+    } finally {
+      setDownloading(false);
+    }
   };
 
   const closeSource = () => {
@@ -1489,7 +1533,7 @@ export default function Screen() {
                       key={c.marker}
                       type="button"
                       aria-pressed={selected}
-                      onClick={() => setSource({ messageId: source.messageId, marker: c.marker })}
+                      onClick={() => switchSource(c.marker)}
                       className={"rounded-md border px-2.5 py-1 text-[12px] font-medium " + RING}
                       style={{
                         borderColor: selected ? brand.primaryColor : BORDER,
@@ -1518,7 +1562,8 @@ export default function Screen() {
                 </span>
               </div>
 
-              {currentSource.deleted ? (
+              {currentSource.deleted ||
+              (currentSource.document_id && unavailableDocIds.has(currentSource.document_id)) ? (
                 <p
                   className="mt-4 rounded-md border px-3 py-2.5 text-[13px] leading-6"
                   style={{
@@ -1557,7 +1602,7 @@ export default function Screen() {
 
             <div className="border-t px-4 py-3" style={{ borderColor: BORDER }}>
               <p aria-live="polite" className="sr-only">
-                {downloadNote}
+                {downloadNote || downloadError}
               </p>
               {downloadNote ? (
                 <p className="mb-2 text-[12px]" style={{ color: "#1B5240" }}>
@@ -1568,15 +1613,35 @@ export default function Screen() {
                   {downloadNote}
                 </p>
               ) : null}
-              <Button
-                variant="outline"
-                disabled={currentSource.deleted}
-                onClick={() => setDownloadNote("Downloading " + currentSource.filename)}
-                className={"w-full justify-center disabled:opacity-50 " + RING}
-              >
-                <Download className="mr-2 h-4 w-4" aria-hidden="true" />
-                {currentSource.deleted ? "Original unavailable" : "Download original"}
-              </Button>
+              {downloadError ? (
+                <p className="mb-2 text-[12px]" style={{ color: "#9B3B2F" }}>
+                  <AlertCircle
+                    className="mr-1 inline h-3.5 w-3.5 align-text-bottom"
+                    aria-hidden="true"
+                  />
+                  {downloadError}
+                </p>
+              ) : null}
+              {(() => {
+                const unavailable =
+                  !!currentSource.deleted ||
+                  (!!currentSource.document_id && unavailableDocIds.has(currentSource.document_id));
+                return (
+                  <Button
+                    variant="outline"
+                    disabled={unavailable || downloading}
+                    onClick={() => downloadOriginal(currentSource)}
+                    className={"w-full justify-center disabled:opacity-50 " + RING}
+                  >
+                    <Download className="mr-2 h-4 w-4" aria-hidden="true" />
+                    {unavailable
+                      ? "Original unavailable"
+                      : downloading
+                        ? "Downloading…"
+                        : "Download original"}
+                  </Button>
+                );
+              })()}
             </div>
           </aside>
         </div>

@@ -166,6 +166,21 @@ export async function deleteConversation(id: string): Promise<void> {
   return apiFetch<void>(`/conversations/${id}`, { method: "DELETE" });
 }
 
+export interface DownloadUrlResponse {
+  url: string;
+}
+
+/**
+ * Resolves a presigned download URL for a document's original file. A 410
+ * means the original was removed from storage; the caller is expected to
+ * detect that status from the thrown error's message (`apiFetch` embeds the
+ * status code) rather than this function special-casing it, mirroring how
+ * 404 is detected elsewhere in this module.
+ */
+export async function getDocumentDownloadUrl(documentId: string): Promise<DownloadUrlResponse> {
+  return apiFetch<DownloadUrlResponse>(`/documents/${documentId}/download`);
+}
+
 export type ChatStreamEvent =
   | { type: "token"; token: string }
   | { type: "citations"; citations: CitationItem[] }

@@ -33,6 +33,7 @@ class _FakeS3:
     def __init__(self) -> None:
         self.put_calls: list[tuple[str, str, bytes]] = []
         self.delete_calls: list[tuple[str, str]] = []
+        self.presign_calls: list[tuple[str, dict, int]] = []
         self.fail_delete = False
 
     def put_object(self, Bucket: str, Key: str, Body: bytes) -> None:  # noqa: N803
@@ -42,6 +43,10 @@ class _FakeS3:
         if self.fail_delete:
             raise RuntimeError("storage unavailable")
         self.delete_calls.append((Bucket, Key))
+
+    def generate_presigned_url(self, operation_name, Params, ExpiresIn):  # noqa: N803
+        self.presign_calls.append((operation_name, Params, ExpiresIn))
+        return f"https://fake-s3.example.com/{Params['Key']}?signature=fake&expires={ExpiresIn}"
 
 
 class _FakeCelery:
@@ -413,6 +418,53 @@ def test_deleted_document_never_listed_or_downloadable_cross_org(
 
     listing = client.get("/documents", headers=headers_a)
     assert all(item["id"] != str(doc_id) for item in listing.json()["items"])
+
+
+def test_download_requires_auth() -> None:
+    response = client.get(f"/documents/{uuid.uuid4()}/download")
+    assert response.status_code == 401
+
+
+def test_download_returns_real_presigned_url_with_disposition_and_content_type(
+    auth_header: dict[str, str], fake_s3: _FakeS3, fake_celery: _FakeCelery
+) -> None:
+    response = client.post(
+        "/documents",
+        headers=auth_header,
+        files=[("files", ("report.pdf", io.BytesIO(b"%PDF-1.4"), "application/pdf"))],
+    )
+    doc_id = response.json()[0]["id"]
+
+    download = client.get(f"/documents/{doc_id}/download", headers=auth_header)
+    assert download.status_code == 200
+    url = download.json()["url"]
+
+    assert "example-bucket.s3.amazonaws.com" not in url
+    assert "placeholder" not in url
+
+    assert len(fake_s3.presign_calls) == 1
+    operation_name, params, expires_in = fake_s3.presign_calls[0]
+    assert operation_name == "get_object"
+    assert params["ResponseContentDisposition"] == 'attachment; filename="report.pdf"'
+    assert params["ResponseContentType"] == "application/pdf"
+    assert expires_in == 300
+
+
+def test_download_cross_org_non_deleted_is_404_or_403(
+    db_session: Session, fake_s3: _FakeS3, fake_celery: _FakeCelery
+) -> None:
+    org_a = Organization(id=uuid.uuid4(), name="Org DL A", created_at=datetime.now(UTC))
+    org_b = Organization(id=uuid.uuid4(), name="Org DL B", created_at=datetime.now(UTC))
+    db_session.add_all([org_a, org_b])
+    db_session.commit()
+
+    _, headers_a = _make_user(db_session, org_a, role="member")
+    doc_id = _upload_one(headers_a)
+
+    _, headers_b = _make_user(db_session, org_b, role="admin")
+    response = client.get(f"/documents/{doc_id}/download", headers=headers_b)
+    assert response.status_code in (404, 403)
+    assert "url" not in response.json()
 
 
 def test_failed_document_still_downloadable(

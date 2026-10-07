@@ -3,6 +3,7 @@ GET /documents/{id}/download."""
 
 from __future__ import annotations
 
+import os
 import uuid
 from datetime import UTC, datetime
 from typing import Annotated
@@ -40,6 +41,27 @@ ALLOWED_FORMATS = {
     ".csv": "csv",
     ".md": "md",
 }
+
+# Presigned download URLs are short-lived by design (AC-111): a leaked or
+# cached URL stops working on its own rather than granting indefinite
+# access. Configurable so an operator can tighten or loosen it without a
+# code change; defaults to 5 minutes.
+DOWNLOAD_URL_EXPIRES_SECONDS = int(os.getenv("DOWNLOAD_URL_EXPIRES_SECONDS", "300"))
+
+# Original content type served via `ResponseContentType` on the presigned
+# URL, keyed by the same format string stored on `Document.format`.
+_CONTENT_TYPES = {
+    "pdf": "application/pdf",
+    "docx": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+    "txt": "text/plain",
+    "csv": "text/csv",
+    "md": "text/markdown",
+}
+
+
+def _content_type_for(fmt: str) -> str:
+    return _CONTENT_TYPES.get((fmt or "").lower(), "application/octet-stream")
+
 
 _UNSUPPORTED_TYPE_MESSAGE = "Only PDF, DOCX, TXT, CSV and Markdown files are supported"
 _OVER_SIZE_MESSAGE = "File exceeds the 50MB per-file limit"
@@ -304,4 +326,14 @@ async def download_document(
             raise HTTPException(status_code=410, detail="source document no longer available")
         raise HTTPException(status_code=404, detail="Document not found")
 
-    return DownloadUrlResponse(url=f"https://example-bucket.s3.amazonaws.com/{id}?placeholder=1")
+    url = get_s3_client().generate_presigned_url(
+        "get_object",
+        Params={
+            "Bucket": S3_BUCKET,
+            "Key": document.s3_key,
+            "ResponseContentDisposition": f'attachment; filename="{document.filename}"',
+            "ResponseContentType": _content_type_for(document.format),
+        },
+        ExpiresIn=DOWNLOAD_URL_EXPIRES_SECONDS,
+    )
+    return DownloadUrlResponse(url=url)

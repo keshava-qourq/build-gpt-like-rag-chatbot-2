@@ -21,8 +21,9 @@ import app.retrieval as retrieval_module
 import app.routers.conversations as conversations_module
 from app.auth import create_access_token
 from app.database import SessionLocal
+from app.deletions import DeletedDocument
 from app.main import app
-from app.models import Chunk, Conversation, Document, Message, Organization, User
+from app.models import Chunk, Citation, Conversation, Document, Message, Organization, User
 
 client = TestClient(app)
 
@@ -725,3 +726,120 @@ def test_regenerate_reuses_preceding_user_turn(
     )
     assert len(messages) == 2  # old assistant turn replaced, not appended
     assert messages[-1].content == "second answer [1]."
+
+
+# ---------------------------------------------------------------------------
+# AC-110, AC-111's sibling: citations in a reopened conversation resolve the
+# same document/location/text, and signal deletion explicitly.
+# ---------------------------------------------------------------------------
+
+
+def test_reopened_conversation_citation_includes_filename_and_format(
+    db_session: Session, user_and_headers, monkeypatch
+) -> None:
+    user, headers = user_and_headers
+    create = client.post("/conversations", headers=headers)
+    conv_id = uuid.UUID(create.json()["id"])
+
+    document = Document(
+        id=uuid.uuid4(),
+        org_id=user.org_id,
+        uploader_id=user.id,
+        filename="handbook.pdf",
+        format="pdf",
+        size_bytes=10,
+        s3_key="key-handbook",
+        status="ready",
+        created_at=datetime.now(UTC),
+    )
+    db_session.add(document)
+    db_session.commit()
+    db_session.add(
+        Chunk(
+            id=uuid.uuid4(),
+            org_id=user.org_id,
+            document_id=document.id,
+            ordinal=0,
+            text="Vacation policy details.",
+            embedding=QUERY_VECTOR,
+            embedding_model="fake-model",
+            embedding_dim=3,
+            page_start=2,
+        )
+    )
+    db_session.commit()
+
+    fake_provider = _FakeStreamingLLMProvider(["Vacation policy [1]."])
+    monkeypatch.setattr(generation_module, "get_llm_provider", lambda: fake_provider)
+    client.post(
+        f"/conversations/{conv_id}/messages", headers=headers, json={"content": "vacation?"}
+    )
+
+    detail = client.get(f"/conversations/{conv_id}", headers=headers).json()
+    assistant = next(m for m in detail["messages"] if m["role"] == "assistant")
+    citation = assistant["citations"][0]
+    assert citation["document_id"] == str(document.id)
+    assert citation["filename"] == "handbook.pdf"
+    assert citation["format"] == "pdf"
+    assert citation["location_label"] == "p. 2"
+    assert citation["snapshot_text"] == "Vacation policy details."
+    assert citation["deleted"] is False
+
+
+def test_reopened_conversation_citation_marks_deleted_document_with_fallback_filename(
+    db_session: Session, user_and_headers, monkeypatch
+) -> None:
+    user, headers = user_and_headers
+    create = client.post("/conversations", headers=headers)
+    conv_id = uuid.UUID(create.json()["id"])
+
+    document = Document(
+        id=uuid.uuid4(),
+        org_id=user.org_id,
+        uploader_id=user.id,
+        filename="soon-deleted.txt",
+        format="txt",
+        size_bytes=10,
+        s3_key="key-soon-deleted",
+        status="ready",
+        created_at=datetime.now(UTC),
+    )
+    db_session.add(document)
+    db_session.commit()
+    db_session.add(
+        Chunk(
+            id=uuid.uuid4(),
+            org_id=user.org_id,
+            document_id=document.id,
+            ordinal=0,
+            text="Transient content.",
+            embedding=QUERY_VECTOR,
+            embedding_model="fake-model",
+            embedding_dim=3,
+        )
+    )
+    db_session.commit()
+
+    fake_provider = _FakeStreamingLLMProvider(["Transient content [1]."])
+    monkeypatch.setattr(generation_module, "get_llm_provider", lambda: fake_provider)
+    client.post(f"/conversations/{conv_id}/messages", headers=headers, json={"content": "q?"})
+
+    # Simulate the real deletion flow (app/routers/documents.py): null the
+    # citation's live references and record a tombstone, then delete the
+    # document row -- without going through the HTTP delete endpoint, since
+    # that path is covered by test_documents.py.
+    citation = db_session.query(Citation).filter(Citation.document_id == document.id).one()
+    citation.document_id = None
+    db_session.add(
+        DeletedDocument(id=document.id, org_id=user.org_id, deleted_at=datetime.now(UTC))
+    )
+    db_session.delete(document)
+    db_session.commit()
+
+    detail = client.get(f"/conversations/{conv_id}", headers=headers).json()
+    assistant = next(m for m in detail["messages"] if m["role"] == "assistant")
+    citation_out = assistant["citations"][0]
+    assert citation_out["document_id"] is None
+    assert citation_out["deleted"] is True
+    assert citation_out["filename"] == "soon-deleted.txt"
+    assert citation_out["format"] == "txt"

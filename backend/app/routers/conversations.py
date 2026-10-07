@@ -22,6 +22,7 @@ from sqlalchemy.orm import Session
 
 from app.auth import RequireAuth
 from app.database import get_db
+from app.deletions import DeletedDocument
 from app.generation import AnswerCitations, AnswerToken, ResolvedCitation, answer_question
 from app.models import Citation, Conversation, Document, Message
 from app.providers.llm import get_llm_provider
@@ -79,21 +80,20 @@ def _sse(event: str, data) -> bytes:
 
 def _citation_event_payload(db: Session, citations: list[ResolvedCitation]) -> list[dict]:
     document_ids = {c.document_id for c in citations if c.document_id is not None}
-    filenames: dict[uuid.UUID, str] = {}
+    documents: dict[uuid.UUID, Document] = {}
     if document_ids:
-        filenames = {
-            row.id: row.filename
-            for row in db.query(Document.id, Document.filename)
-            .filter(Document.id.in_(document_ids))
-            .all()
+        documents = {
+            doc.id: doc for doc in db.query(Document).filter(Document.id.in_(document_ids)).all()
         }
     return [
         {
             "marker": c.marker,
             "document_id": str(c.document_id) if c.document_id else None,
-            "filename": filenames.get(c.document_id) if c.document_id else None,
+            "filename": documents[c.document_id].filename if c.document_id in documents else None,
+            "format": documents[c.document_id].format if c.document_id in documents else None,
             "location_label": c.location_label,
             "snapshot_text": c.snapshot_text,
+            "deleted": c.document_id is None or c.document_id not in documents,
         }
         for c in citations
     ]
@@ -150,7 +150,15 @@ async def _persist_assistant_turn(
     db.flush()
 
     if status == "complete":
+        document_ids = {c.document_id for c in citations if c.document_id is not None}
+        documents_by_id: dict[uuid.UUID, Document] = {}
+        if document_ids:
+            documents_by_id = {
+                doc.id: doc
+                for doc in db.query(Document).filter(Document.id.in_(document_ids)).all()
+            }
         for citation in citations:
+            doc = documents_by_id.get(citation.document_id) if citation.document_id else None
             db.add(
                 Citation(
                     id=uuid.uuid4(),
@@ -160,6 +168,8 @@ async def _persist_assistant_turn(
                     document_id=citation.document_id,
                     snapshot_text=citation.snapshot_text,
                     location_label=citation.location_label,
+                    filename=doc.filename if doc is not None else None,
+                    format=doc.format if doc is not None else None,
                 )
             )
 
@@ -281,20 +291,41 @@ async def get_conversation(
         .order_by(Message.created_at.asc())
         .all()
     )
+
+    all_citations = [c for m in messages for c in m.citations]
+    document_ids = {c.document_id for c in all_citations if c.document_id is not None}
+    documents: dict[uuid.UUID, Document] = {}
+    tombstoned_ids: set[uuid.UUID] = set()
+    if document_ids:
+        documents = {
+            doc.id: doc for doc in db.query(Document).filter(Document.id.in_(document_ids)).all()
+        }
+        tombstoned_ids = {
+            row.id
+            for row in db.query(DeletedDocument.id)
+            .filter(DeletedDocument.id.in_(document_ids))
+            .all()
+        }
+
+    def _citation_out(c: Citation) -> CitationOut:
+        doc = documents.get(c.document_id) if c.document_id else None
+        is_deleted = c.document_id is None or c.document_id in tombstoned_ids
+        return CitationOut(
+            marker=c.marker,
+            document_id=c.document_id,
+            filename=doc.filename if doc is not None else c.filename,
+            format=doc.format if doc is not None else c.format,
+            snapshot_text=c.snapshot_text,
+            location_label=c.location_label,
+            deleted=is_deleted,
+        )
+
     message_outs = [
         MessageOut(
             id=m.id,
             role=m.role,
             content=m.content,
-            citations=[
-                CitationOut(
-                    marker=c.marker,
-                    document_id=c.document_id,
-                    snapshot_text=c.snapshot_text,
-                    location_label=c.location_label,
-                )
-                for c in sorted(m.citations, key=lambda c: c.marker)
-            ],
+            citations=[_citation_out(c) for c in sorted(m.citations, key=lambda c: c.marker)],
         )
         for m in messages
     ]

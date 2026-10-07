@@ -197,6 +197,13 @@ class Citation(Base):
     document_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("documents.id"), nullable=True)
     snapshot_text: Mapped[str] = mapped_column(Text)
     location_label: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    # Snapshotted at citation creation time so a reopened conversation can
+    # still show a sensible filename/format once the cited document is
+    # deleted and `document_id` is nulled out (see app/deletions.py) -- the
+    # live `Document.filename`/`.format` is preferred when the document
+    # still exists; these are only the fallback.
+    filename: Mapped[str | None] = mapped_column(String(512), nullable=True)
+    format: Mapped[str | None] = mapped_column(String(20), nullable=True)
 
     message: Mapped[Message] = relationship(back_populates="citations")
 
@@ -216,6 +223,22 @@ if engine.dialect.name == "sqlite":
         columns = {row[1] for row in cursor.fetchall()}
         if columns and "supersedes_document_id" not in columns:
             cursor.execute("ALTER TABLE documents ADD COLUMN supersedes_document_id VARCHAR(32)")
+            dbapi_connection.commit()
+        cursor.close()
+
+    @event.listens_for(engine, "connect")
+    def _ensure_citations_snapshot_columns(dbapi_connection, _connection_record) -> None:
+        """Same additive-only backfill as `_ensure_documents_supersedes_column`
+        above, for the `filename`/`format` snapshot columns added to
+        `citations` so existing local SQLite files keep working."""
+        cursor = dbapi_connection.cursor()
+        cursor.execute("PRAGMA table_info(citations)")
+        columns = {row[1] for row in cursor.fetchall()}
+        if columns and "filename" not in columns:
+            cursor.execute("ALTER TABLE citations ADD COLUMN filename VARCHAR(512)")
+            dbapi_connection.commit()
+        if columns and "format" not in columns:
+            cursor.execute("ALTER TABLE citations ADD COLUMN format VARCHAR(20)")
             dbapi_connection.commit()
         cursor.close()
 

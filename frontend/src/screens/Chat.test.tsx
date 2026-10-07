@@ -18,6 +18,7 @@ vi.mock("@/lib/api", async () => {
     deleteConversation: vi.fn(),
     streamAssistantMessage: vi.fn(),
     regenerateAssistantMessage: vi.fn(),
+    getDocumentDownloadUrl: vi.fn(),
   };
 });
 
@@ -29,6 +30,7 @@ const mocked = api as unknown as {
   deleteConversation: ReturnType<typeof vi.fn>;
   streamAssistantMessage: ReturnType<typeof vi.fn>;
   regenerateAssistantMessage: ReturnType<typeof vi.fn>;
+  getDocumentDownloadUrl: ReturnType<typeof vi.fn>;
 };
 
 function renderScreen() {
@@ -108,6 +110,7 @@ beforeEach(() => {
   mocked.deleteConversation.mockReset();
   mocked.streamAssistantMessage.mockReset();
   mocked.regenerateAssistantMessage.mockReset();
+  mocked.getDocumentDownloadUrl.mockReset();
 });
 
 afterEach(() => {
@@ -829,6 +832,194 @@ describe("Chat screen", () => {
       // The unresolvable "[2]" is not itself a button of any kind.
       const danglingMarker = screen.getByText("[2]");
       expect(danglingMarker.closest("button")).toBeNull();
+    });
+  });
+
+  describe("citation panel: navigation, scroll, focus (AC-107..110)", () => {
+    const CITATION_2: CitationItem = {
+      marker: 2,
+      document_id: "doc-2",
+      filename: "Support SLA.pdf",
+      format: "PDF",
+      location_label: "Page 1",
+      snapshot_text: "A receipt is required for a refund.",
+    };
+
+    function mockConversationWithTwoSources() {
+      mocked.listConversations.mockResolvedValue([
+        { id: "conv-1", title: "Refunds", updated_at: new Date().toISOString() },
+      ]);
+      mocked.getConversation.mockResolvedValue({
+        id: "conv-1",
+        title: "Refunds",
+        messages: [
+          { id: "msg-1", role: "user", content: "What is the refund policy?", citations: [] },
+          {
+            id: "msg-2",
+            role: "assistant",
+            content: "Refunds take 30 days [1], and a receipt is required [2].",
+            citations: [CITATION, CITATION_2],
+          },
+        ],
+      });
+    }
+
+    it("lets the user move between several sources on one answer without closing the panel (AC-108)", async () => {
+      mockConversationWithTwoSources();
+      renderScreen();
+      await screen.findByText(/Refunds take 30 days/);
+
+      const marker1 = await screen.findByRole("button", { name: /Source 1: Acme MSA v4\.pdf/i });
+      await userEvent.click(marker1);
+      let panel = screen.getByRole("region", { name: "Cited source" });
+      expect(within(panel).getByText("Acme MSA v4.pdf")).toBeInTheDocument();
+
+      await userEvent.click(within(panel).getByRole("button", { name: "Source 2" }));
+      panel = screen.getByRole("region", { name: "Cited source" });
+      expect(within(panel).getByText("Support SLA.pdf")).toBeInTheDocument();
+      expect(within(panel).getByText("A receipt is required for a refund.")).toBeInTheDocument();
+
+      await userEvent.click(within(panel).getByRole("button", { name: "Source 1" }));
+      panel = screen.getByRole("region", { name: "Cited source" });
+      expect(within(panel).getByText("Acme MSA v4.pdf")).toBeInTheDocument();
+    });
+
+    it("returns focus to the marker and leaves conversation scroll position unchanged on close, without re-triggering autoscroll (AC-109)", async () => {
+      mockConversationWithTwoSources();
+      renderScreen();
+      await screen.findByText(/Refunds take 30 days/);
+
+      const thread = screen.getByText("Conversation", { selector: "h2" }).parentElement!;
+      Object.defineProperty(thread, "scrollHeight", { value: 2000, configurable: true });
+      thread.scrollTop = 450;
+
+      const marker1 = await screen.findByRole("button", { name: /Source 1: Acme MSA v4\.pdf/i });
+      await userEvent.click(marker1);
+      expect(thread.scrollTop).toBe(450);
+
+      const panel = screen.getByRole("region", { name: "Cited source" });
+      await userEvent.click(within(panel).getByRole("button", { name: "Close source panel" }));
+
+      expect(screen.queryByRole("region", { name: "Cited source" })).toBeNull();
+      expect(thread.scrollTop).toBe(450);
+      expect(marker1).toHaveFocus();
+    });
+
+    it("shows the same document name, location and chunk text from GET /conversations/{id} citations on reopen (AC-110)", async () => {
+      mockConversationWithTwoSources();
+      renderScreen();
+      await screen.findByText(/Refunds take 30 days/);
+
+      const marker2 = await screen.findByRole("button", { name: /Source 2: Support SLA\.pdf/i });
+      await userEvent.click(marker2);
+      const panel = screen.getByRole("region", { name: "Cited source" });
+      expect(within(panel).getByText("Support SLA.pdf")).toBeInTheDocument();
+      expect(within(panel).getByText("Page 1")).toBeInTheDocument();
+      expect(within(panel).getByText("A receipt is required for a refund.")).toBeInTheDocument();
+    });
+  });
+
+  describe("citation panel: download original (AC-111, AC-113)", () => {
+    function mockSingleCitationConversation(citation: CitationItem) {
+      mocked.listConversations.mockResolvedValue([
+        { id: "conv-1", title: "Retention periods", updated_at: new Date().toISOString() },
+      ]);
+      mocked.getConversation.mockResolvedValue({
+        id: "conv-1",
+        title: "Retention periods",
+        messages: [
+          { id: "msg-1", role: "user", content: "What is the retention period?", citations: [] },
+          {
+            id: "msg-2",
+            role: "assistant",
+            content: "Thirty days [1].",
+            citations: [citation],
+          },
+        ],
+      });
+    }
+
+    it("fetches the presigned URL and navigates to it so the browser saves the original file (AC-111)", async () => {
+      mockSingleCitationConversation(CITATION);
+      mocked.getDocumentDownloadUrl.mockResolvedValue({
+        url: "https://example-bucket.s3.amazonaws.com/doc-1?sig=abc",
+      });
+      const clickSpy = vi
+        .spyOn(HTMLAnchorElement.prototype, "click")
+        .mockImplementation(() => {});
+
+      renderScreen();
+      const marker = await screen.findByRole("button", { name: /Source 1: Acme MSA v4\.pdf/i });
+      await userEvent.click(marker);
+
+      await userEvent.click(screen.getByRole("button", { name: "Download original" }));
+
+      await waitFor(() => expect(mocked.getDocumentDownloadUrl).toHaveBeenCalledWith("doc-1"));
+      await waitFor(() => expect(clickSpy).toHaveBeenCalled());
+      await waitFor(() =>
+        expect(
+          screen.getAllByText(/Download started for Acme MSA v4\.pdf/).length,
+        ).toBeGreaterThan(0),
+      );
+
+      clickSpy.mockRestore();
+    });
+
+    it("shows an unavailable message and disables download when the citation's deleted flag is true (AC-113)", async () => {
+      mockSingleCitationConversation({ ...CITATION, deleted: true });
+      renderScreen();
+      const marker = await screen.findByRole("button", { name: /Source 1: Acme MSA v4\.pdf/i });
+      await userEvent.click(marker);
+
+      const panel = screen.getByRole("region", { name: "Cited source" });
+      expect(within(panel).getByText(/no longer available to download/i)).toBeInTheDocument();
+      expect(
+        within(panel).getByRole("button", { name: "Original unavailable" }),
+      ).toBeDisabled();
+    });
+
+    it("shows an in-panel unavailable message and disables download on a 410 response (AC-113)", async () => {
+      mockSingleCitationConversation(CITATION);
+      mocked.getDocumentDownloadUrl.mockRejectedValue(
+        new Error("GET /documents/doc-1/download failed: 410"),
+      );
+
+      renderScreen();
+      const marker = await screen.findByRole("button", { name: /Source 1: Acme MSA v4\.pdf/i });
+      await userEvent.click(marker);
+
+      await userEvent.click(screen.getByRole("button", { name: "Download original" }));
+
+      const panel = screen.getByRole("region", { name: "Cited source" });
+      await waitFor(() =>
+        expect(
+          within(panel).getAllByText(/removed from the library and cannot be downloaded/i).length,
+        ).toBeGreaterThan(0),
+      );
+      expect(
+        within(panel).getByRole("button", { name: "Original unavailable" }),
+      ).toBeDisabled();
+    });
+
+    it("shows an in-panel error, never a silent no-op, on an unauthorised or failed download", async () => {
+      mockSingleCitationConversation(CITATION);
+      mocked.getDocumentDownloadUrl.mockRejectedValue(
+        new Error("GET /documents/doc-1/download failed: 403"),
+      );
+
+      renderScreen();
+      const marker = await screen.findByRole("button", { name: /Source 1: Acme MSA v4\.pdf/i });
+      await userEvent.click(marker);
+
+      await userEvent.click(screen.getByRole("button", { name: "Download original" }));
+
+      const panel = screen.getByRole("region", { name: "Cited source" });
+      await waitFor(() =>
+        expect(
+          within(panel).getAllByText(/not authorised to download this file/i).length,
+        ).toBeGreaterThan(0),
+      );
+      expect(screen.getByRole("button", { name: "Download original" })).toBeInTheDocument();
     });
   });
 });

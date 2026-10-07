@@ -111,8 +111,11 @@ class ConversationCreateResponse(BaseModel):
 class CitationOut(BaseModel):
     marker: int
     document_id: uuid.UUID | None = None
+    filename: str | None = None
+    format: str | None = None
     snapshot_text: str
     location_label: str | None = None
+    deleted: bool = False
 
 
 class MessageOut(BaseModel):
