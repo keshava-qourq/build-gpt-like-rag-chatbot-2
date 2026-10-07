@@ -50,7 +50,9 @@ describe("Help screen", () => {
     ).toBeInTheDocument();
 
     await user.click(screen.getByRole("tab", { name: /Uploading documents/i }));
-    expect(screen.getByText(/50MB per file, for every one of the five supported formats/i)).toBeInTheDocument();
+    expect(
+      screen.getByText(/50MB per file, for every one of the five supported formats/i),
+    ).toBeInTheDocument();
   });
 
   it("does not mention pricing, plans, invoices, payment or subscriptions", () => {
