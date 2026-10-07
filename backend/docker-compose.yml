@@ -1,0 +1,140 @@
+name: rag-chatbot
+
+# One command from a clean checkout: `docker compose up --build` from this
+# directory (backend/) brings up every service the app needs -- frontend,
+# backend, worker, broker, Postgres with pgvector and local S3-compatible
+# object storage (MinIO, no AWS dependency for local runs). Reachable at
+# http://localhost:5173 once `frontend` reports healthy.
+#
+# Config is read from backend/.env (see backend/.env.example for every
+# variable this file and the backend/worker containers read, with safe local
+# defaults and placeholders for provider API keys). Compose loads that file
+# automatically because it lives next to this one.
+
+services:
+  postgres:
+    image: pgvector/pgvector:pg16
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-postgres}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-postgres}
+      POSTGRES_DB: ${POSTGRES_DB:-app}
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-postgres}"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  redis:
+    image: redis:7.4-alpine
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  # Local S3-compatible object storage (no AWS dependency for local runs).
+  # app/storage.py talks to this exactly like it would talk to AWS S3, just
+  # with S3_ENDPOINT_URL pointed here instead of left unset.
+  minio:
+    image: minio/minio:RELEASE.2024-10-13T13-34-11Z
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: ${AWS_ACCESS_KEY_ID:-minioadmin}
+      MINIO_ROOT_PASSWORD: ${AWS_SECRET_ACCESS_KEY:-minioadmin}
+    ports:
+      - "9000:9000"
+      - "9001:9001"
+    volumes:
+      - miniodata:/data
+
+  # Creates the bucket app/storage.py (S3_BUCKET) expects, then exits. The
+  # backend and worker containers only need this to have run once, not to
+  # keep running, so `service_completed_successfully` is what they wait on.
+  minio-init:
+    image: minio/mc:RELEASE.2024-10-08T09-37-21Z
+    depends_on:
+      - minio
+    entrypoint: >
+      /bin/sh -c "
+      until mc alias set local http://minio:9000 ${AWS_ACCESS_KEY_ID:-minioadmin} ${AWS_SECRET_ACCESS_KEY:-minioadmin}; do sleep 1; done;
+      mc mb --ignore-existing local/${S3_BUCKET:-documents};
+      exit 0;
+      "
+
+  backend:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    env_file:
+      - .env
+    environment:
+      DATABASE_URL: postgresql+psycopg://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-postgres}@postgres:5432/${POSTGRES_DB:-app}
+      CELERY_BROKER_URL: redis://redis:6379/0
+      S3_ENDPOINT_URL: http://minio:9000
+      ALLOWED_ORIGINS: ${ALLOWED_ORIGINS:-http://localhost:5173}
+    # Runs the (idempotent, additive-only) schema creation and the initial
+    # admin-account seed from ADMIN_EMAIL/ADMIN_PASSWORD before serving
+    # requests -- app/seed_admin.py does nothing on a restart where the
+    # admin user already exists (AC-115).
+    command: sh -c "python -m app.seed_admin && uvicorn app.main:app --host 0.0.0.0 --port 8000"
+    ports:
+      - "8000:8000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      minio-init:
+        condition: service_completed_successfully
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health', timeout=3)"]
+      interval: 10s
+      timeout: 3s
+      retries: 10
+      start_period: 15s
+
+  # Same image as `backend`; consumes `ingest_document` off the same broker
+  # the API publishes to (app/queue.py's celery_app), so an upload queued by
+  # the API progresses to ready without any separate wiring (AC-116).
+  worker:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    env_file:
+      - .env
+    environment:
+      DATABASE_URL: postgresql+psycopg://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-postgres}@postgres:5432/${POSTGRES_DB:-app}
+      CELERY_BROKER_URL: redis://redis:6379/0
+      S3_ENDPOINT_URL: http://minio:9000
+    command: celery -A app.ingestion:celery_app worker --loglevel=info --concurrency=${CELERY_WORKER_CONCURRENCY:-4}
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      minio-init:
+        condition: service_completed_successfully
+      backend:
+        condition: service_started
+
+  frontend:
+    build:
+      context: ../frontend
+      dockerfile: Dockerfile
+      args:
+        VITE_API_BASE_URL: ${VITE_API_BASE_URL:-http://localhost:8000}
+    ports:
+      - "5173:5173"
+    depends_on:
+      backend:
+        condition: service_started
+
+volumes:
+  pgdata:
+  miniodata:
